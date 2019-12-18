@@ -1,0 +1,66 @@
+import tensorflow as tf
+from tensorflow.keras.layers import Dense, Concatenate
+from tensorflow.keras import Model
+from sklearn.datasets import load_iris
+tf.keras.backend.set_floatx('float64')
+iris, target = load_iris(return_X_y=True)
+
+X = iris[:, :3]
+y = iris[:, 3]
+
+ds = tf.data.Dataset.from_tensor_slices((X, y)).shuffle(25).batch(8)
+
+class MyModel(Model):
+  def __init__(self):
+    super(MyModel, self).__init__()
+    self.d0 = Dense(16, activation='relu')
+    self.d1 = Dense(32, activation='relu')
+    self.d2 = Dense(1, activation='linear')
+
+  def call(self, x):
+    x = self.d0(x)
+    x = self.d1(x)
+    x = self.d2(x)
+    return x
+
+model = MyModel()
+
+loss_object = tf.keras.losses.MeanSquaredError()
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=5e-4)
+
+loss = tf.keras.metrics.Mean(name='loss')
+error = tf.keras.metrics.MeanSquaredError()
+
+@tf.function
+def train_step(inputs, targets):
+    with tf.GradientTape() as tape:
+        predictions = model(inputs)
+        run_loss = loss_object(targets, predictions)
+    gradients = tape.gradient(run_loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    loss(run_loss)
+    error(predictions, targets)
+
+for epoch in range(10):
+  for data, labels in ds:
+    train_step(data, labels)
+
+  template = 'Epoch {:>2}, Loss: {:>7.4f}, MSE: {:>6.2f}'
+  print(template.format(epoch+1,
+                        loss.result(),
+                        error.result()*100))
+  # Reset the metrics for the next epoch
+  loss.reset_states()
+  error.reset_states()
+
+Epoch  1, Loss:  1.3080, MSE: 130.80
+Epoch  2, Loss:  0.4321, MSE:  43.21
+Epoch  3, Loss:  0.2252, MSE:  22.52
+Epoch  4, Loss:  0.1739, MSE:  17.39
+Epoch  5, Loss:  0.1506, MSE:  15.06
+Epoch  6, Loss:  0.1324, MSE:  13.24
+Epoch  7, Loss:  0.1166, MSE:  11.66
+Epoch  8, Loss:  0.1044, MSE:  10.44
+Epoch  9, Loss:  0.0891, MSE:   8.91
+Epoch 10, Loss:  0.0761, MSE:   7.61
