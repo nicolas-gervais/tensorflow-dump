@@ -1,0 +1,130 @@
+import tensorflow as tf
+from PIL import Image
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import pathlib
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+path = 'c:/users/nicolas/documents/data/animals/'
+os.chdir(path)
+
+image_generator = ImageDataGenerator(rescale=1./255, validation_split=.9)
+
+train_generator = image_generator.flow_from_directory(
+    path,
+    color_mode='grayscale',
+    target_size=(30, 30),
+    batch_size=16,
+    classes=os.listdir(),
+    subset='training')
+
+validation_generator = image_generator.flow_from_directory(
+    path,
+    color_mode='grayscale',
+    target_size=(30, 30),
+    batch_size=16,
+    classes=os.listdir(),
+    subset='validation')
+
+
+def plots(ims, figsize=(12, 6), rows=4, interp=False, titles=None):
+    if type(ims[0]) is np.ndarray:
+        ims = np.array(ims*255).astype(np.uint8)
+        if ims.shape[-1] != 3:
+            ims = ims.transpose((0, 2, 3, 1))
+    f = plt.figure(figsize=figsize)
+    cols = len(ims)//rows if len(ims) % 2 == 0 else len(ims)//rows + 1
+    for i in range(len(ims)):
+        sp = f.add_subplot(rows, cols, i+1)
+        sp.axis('Off')
+        if titles is not None:
+            sp.set_title(titles[i], fontsize=12)
+        plt.imshow(ims[i][:, 0, :], interpolation=None if interp else 'none') # index for 1dim
+
+imgs, labels = next(train_generator)
+
+# plots(imgs, titles=np.array(os.listdir())[np.argmax(labels, axis=1)])
+
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, Conv2D, Flatten, Dropout, MaxPooling2D
+
+class MyModel(Model):
+    def __init__(self):
+        super(MyModel, self).__init__()
+        self.conv1 = Conv2D(filters=32, kernel_size=(2, 2), activation='relu')
+        self.maxp1 = MaxPooling2D(pool_size=(2, 2))
+        self.conv2 = Conv2D(filters=64, kernel_size=(2, 2), activation='relu')
+        self.maxp2 = MaxPooling2D(pool_size=(2, 2))
+        self.flat0 = Flatten()
+        self.dens1 = Dense(units=128)
+        self.dens2 = Dense(units=256)
+        self.drop1 = Dropout(5e-1)
+        self.actv0 = Dense(10, activation='softmax')
+
+    def call(self, x):
+        x = self.conv1(x)
+        x = self.maxp2(x)
+        x = self.conv2(x)
+        x = self.maxp2(x)
+        x = self.flat0(x)
+        x = self.dens1(x)
+        x = self.dens2(x)
+        x = self.drop1(x)
+        x = self.actv0(x)
+        return x
+
+model = MyModel()
+
+loss_object = tf.keras.losses.CategoricalCrossentropy()
+
+train_acc = tf.keras.metrics.CategoricalAccuracy()
+train_los = tf.keras.metrics.Mean()
+
+test_acc = tf.keras.metrics.CategoricalAccuracy()
+test_los = tf.keras.metrics.Mean()
+
+optimizer = tf.keras.optimizers.Adam()
+
+@tf.function
+def train_step(x, y):
+    with tf.GradientTape() as tape:
+        ypred = model(x)
+        loss = loss_object(y, ypred)
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+    train_los(loss)
+    train_acc(y, ypred)
+
+@tf.function
+def test_step(x, y):
+    ypred = model(x)
+    t_loss = loss_object(y, ypred)
+
+    test_los(t_loss)
+    test_acc(y, ypred)
+
+
+for epoch in range(5):
+    for data, labels in train_generator:
+        train_step(data, labels)
+
+    for test_data, test_labels in validation_generator:
+        test_step(test_data, test_labels)
+
+    template = 'Epoch {:d}, Loss: {:>6.4f}, Acc.: {:>5.2%}, ' \
+               'Test Loss: {:>6.4f}, Test Acc.: {:>5.2%}'
+
+    print(template.format(epoch + 1,
+                          train_los.result(),
+                          train_acc.result(),
+                          test_los.result(),
+                          test_acc.result()))
+
+    train_los.reset_states()
+    train_acc.reset_states()
+
+    test_los.reset_states()
+    test_acc.reset_states()
+
