@@ -1,0 +1,87 @@
+import tensorflow as tf
+from tensorflow.keras.layers import Dense
+from tensorflow.keras import Model
+from sklearn.datasets import load_iris
+tf.keras.backend.set_floatx('float64')
+iris, target = load_iris(return_X_y=True)
+
+X = iris[:, :3]
+y = iris[:, 3]
+z = target
+
+ds = tf.data.Dataset.from_tensor_slices((X, y, z)).shuffle(25).batch(8)
+
+class MyModel(Model):
+    def __init__(self):
+        super(MyModel, self).__init__()
+        self.d0 = Dense(16, activation='relu')
+        self.d1 = Dense(32, activation='relu')
+        self.d2 = Dense(32, activation='relu')
+        self.d3 = Dense(1, activation='linear')
+        self.d4 = Dense(3, activation='softmax')
+
+    def call(self, x):
+        x = self.d0(x)
+        a = self.d1(x)
+        b = self.d2(x)
+        aa = self.d3(a)
+        bb = self.d4(b)
+        return aa, bb
+
+model = MyModel()
+
+loss_obj_reg = tf.keras.losses.MeanSquaredError()
+loss_obj_cat = tf.keras.losses.SparseCategoricalCrossentropy()
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+
+loss_reg = tf.keras.metrics.Mean(name='regression loss')
+loss_cat = tf.keras.metrics.Mean(name='categorical loss')
+
+error_reg = tf.keras.metrics.MeanSquaredError()
+error_cat = tf.keras.metrics.SparseCategoricalAccuracy()
+
+@tf.function
+def train_step(inputs, y_reg, y_cat):
+    with tf.GradientTape() as tape:
+        pred_reg, pred_cat = model(inputs)
+        reg_loss = loss_obj_reg(y_reg, pred_reg)
+        cat_loss = loss_obj_cat(y_cat, pred_cat)
+
+    gradients = tape.gradient([reg_loss, cat_loss], model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    loss_reg(reg_loss)
+    loss_cat(cat_loss)
+
+    error_reg(y_reg, pred_reg)
+    error_cat(y_cat, pred_cat)
+
+
+for epoch in range(500):
+    for xx, yy, zz in ds:
+        train_step(xx, yy, zz)
+
+    template = 'Epoch {:>2}, SCCE: {:>5.2f},' \
+               ' MSE: {:>4.2f}, SAcc: {:>5.1%}'
+    print(template.format(epoch+1,
+                        loss_cat.result(),
+                        error_reg.result(),
+                        error_cat.result()))
+
+    loss_reg.reset_states()
+    loss_cat.reset_states()
+
+    error_reg.reset_states()
+    error_cat.reset_states()
+
+# Epoch 490, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
+# Epoch 491, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
+# Epoch 492, SCCE:  0.27, MSE: 0.03, SAcc: 94.0%
+# Epoch 493, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
+# Epoch 494, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
+# Epoch 495, SCCE:  0.27, MSE: 0.03, SAcc: 94.0%
+# Epoch 496, SCCE:  0.27, MSE: 0.03, SAcc: 94.0%
+# Epoch 497, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
+# Epoch 498, SCCE:  0.27, MSE: 0.03, SAcc: 94.0%
+# Epoch 499, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
+# Epoch 500, SCCE:  0.27, MSE: 0.04, SAcc: 94.0%
