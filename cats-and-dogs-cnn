@@ -1,0 +1,134 @@
+import tensorflow as tf
+from tensorflow.keras import Model
+from tensorflow.keras.preprocessing.image import DirectoryIterator, ImageDataGenerator
+from tensorflow.keras.layers import Conv2D, Dense, Dropout, BatchNormalization, MaxPooling2D, Flatten
+from keras.regularizers import l1, l2
+import numpy as np
+
+directory = '/home/nicolas/Downloads/dogsandcats'
+batch_size = 10
+
+img_iterator = ImageDataGenerator(
+    validation_split=2e-1,
+    rescale=1./255.,
+    rotation_range=15
+)
+
+train_iterator = DirectoryIterator(
+    directory=directory,
+    image_data_generator=img_iterator,
+    classes=['dogs', 'cats'],
+    target_size=(50, 50),
+    color_mode='grayscale',
+    batch_size=batch_size,
+    subset='training',
+    dtype=np.float32
+)
+
+test_iterator = DirectoryIterator(
+    directory=directory,
+    image_data_generator=img_iterator,
+    classes=['dogs', 'cats'],
+    target_size=(50, 50),
+    color_mode='grayscale',
+    batch_size=batch_size,
+    subset='validation',
+    dtype=np.float32
+)
+
+
+class ConvNet(Model):
+    def __init__(self):
+        super(ConvNet, self).__init__()
+        self.conv1 = Conv2D(filters=16,
+                            kernel_size=(3, 3),
+                            strides=(1, 1),
+                            kernel_regularizer=l1(1e-2),
+                            activation='relu')
+        self.maxp1 = MaxPooling2D(pool_size=(2, 2))
+        self.conv2 = Conv2D(filters=32,
+                            kernel_size=(3, 3),
+                            strides=(1, 1),
+                            kernel_regularizer=l2(1e-2),
+                            activation='relu')
+        self.maxp2 = MaxPooling2D(pool_size=(2, 2))
+        self.flat1 = Flatten()
+        self.dens1 = Dense(64, activation='relu')
+        self.drop1 = Dropout(5e-1)
+        self.outp1 = Dense(2)
+
+    def call(self, inputs, training=True):
+        inputs = self.conv1(inputs)
+        inputs = self.maxp1(inputs)
+        inputs = self.conv2(inputs)
+        inputs = self.maxp2(inputs)
+        inputs = self.flat1(inputs)
+        inputs = self.dens1(inputs)
+        inputs = self.drop1(inputs)
+        output = self.outp1(inputs)
+        return output
+
+
+network = ConvNet()
+
+
+def compute_loss(logits, labels):
+  return tf.reduce_mean(
+      tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=labels))
+
+
+compute_accuracy = tf.keras.metrics.CategoricalAccuracy()
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+
+@tf.function
+def train_step(images, labels):
+    with tf.GradientTape() as tape:
+        logits = network(images, training=True)
+        loss = compute_loss(logits, labels)
+        accuracy = compute_accuracy(logits, labels)
+    gradients = tape.gradient(loss, network.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, network.trainable_variables))
+    return loss, accuracy
+
+
+@tf.function
+def test_step(images, labels):
+    logits = network(images, training=False)
+    loss = compute_loss(logits, labels)
+    accuracy = compute_accuracy(logits, labels)
+    return loss, accuracy
+
+
+def train():
+    mean_loss = tf.keras.metrics.Mean('loss', dtype=tf.float32)
+
+    for ix, (image, label) in enumerate(train_iterator, 1):
+        train_loss, train_accuracy = train_step(image, label)
+        if ix % 100 == 0:
+            mean_loss(train_loss)
+            print('{:>4} LOSS {:.4f} ACC {:.2%}'.format(
+                ix,
+                mean_loss.result().numpy(),
+                compute_accuracy.result().numpy()
+            ))
+            mean_loss.reset_states()
+            compute_accuracy.reset_states()
+        if ix == len(train_iterator):
+            for ix, (image, label) in enumerate(test_iterator, 1):
+                test_loss, test_accuracy = test_step(image, label)
+                if ix == len(test_iterator):
+                    mean_loss(test_loss)
+                    print('\n{:>4} LOSS {:.4f} ACC {:.2%}\n'.format(
+                        ix,
+                        mean_loss.result().numpy(),
+                        compute_accuracy.result().numpy()
+                    ))
+                    mean_loss.reset_states()
+                    compute_accuracy.reset_states()
+
+
+if __name__ == '__main__':
+    for epoch in range(5):
+        train()
