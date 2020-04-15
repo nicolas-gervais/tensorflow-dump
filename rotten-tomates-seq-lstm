@@ -1,0 +1,60 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from tensorflow import keras
+from tensorflow.keras import  Model
+from tensorflow.keras.layers import LSTM, Embedding, Dense
+import os
+os.chdir('/home/nicolas/Documents/datasets')
+
+df = pd.read_csv('rotten_tomatoes_reviews.csv', nrows=450_000)
+
+df = df.loc[df.Review.str.len() >= 3].sample(frac=1)
+
+array = df.Review.values
+ratings = df.Freshness.values
+target = keras.utils.to_categorical(ratings)
+
+tokenizer = keras.preprocessing.text.Tokenizer(num_words=2_000)
+
+tokenizer.fit_on_texts(array)
+vector = tokenizer.texts_to_sequences(array)
+
+padded = keras.preprocessing.sequence.pad_sequences(vector, maxlen=40)
+
+X_train, X_test, y_train, y_test = train_test_split(padded, target, test_size=2e-1)
+
+
+class RNN(Model):
+    def __init__(self):
+        super(RNN, self).__init__()
+        self.rnn1 = LSTM(64, return_sequences=True, return_state=True)
+        self.rnn2 = LSTM(64)
+        self.emb1 = Embedding(input_dim=2_000, output_dim=50, input_length=40)
+        self.flc1 = Dense(2)
+
+    def __call__(self, inputs, training=None, mask=None):
+        x = self.emb1(inputs)
+        x = self.rnn1(x)
+        x = self.rnn2(x)
+        out = self.flc1(x)
+        return out
+
+
+def main():
+    model = RNN()
+
+    model.compile(optimizer=keras.optimizers.Adam(0.001),
+                  loss=keras.losses.BinaryCrossentropy(from_logits=True),
+                  metrics=['accuracy'])
+
+    history = model.fit(X_train, y_train, batch_size=16, epochs=10,
+              validation_data=[X_test, y_test], verbose=1)
+
+    test_loss, test_accuracy = model.evaluate(X_test, y_test, batch_size=16, verbose=1)
+    return history, test_loss, test_accuracy
+
+
+if __name__ == '__main__':
+    main()
+
+# final val acc = 87.87%
