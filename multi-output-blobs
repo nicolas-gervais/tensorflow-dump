@@ -13,12 +13,17 @@ N_SAMPLES = 100_000
 x, y = make_blobs(n_samples=N_SAMPLES, n_features=N_FEATURES, centers=N_CENTERS, cluster_std=3)
 z = np.sum(x, axis=1) + np.random.rand(len(x))
 
-train_data = tf.data.Dataset.from_tensor_slices((x[:int(N_SAMPLES*.9)],
-                                                 y[:int(N_SAMPLES*.9)],
-                                                 z[:int(N_SAMPLES*.9)])).shuffle(128).batch(128)
+train_data = tf.data.Dataset.from_tensor_slices(tensors=(x[:int(N_SAMPLES*.9)],
+                                                         y[:int(N_SAMPLES*.9)],
+                                                         z[:int(N_SAMPLES*.9)]))\
+    .shuffle(buffer_size=int(N_SAMPLES*.9))\
+    .batch(batch_size=128)
+
 test_data = tf.data.Dataset.from_tensors((x[int(N_SAMPLES*.9):],
                                           y[int(N_SAMPLES*.9):],
-                                          z[int(N_SAMPLES*.9):]))
+                                          z[int(N_SAMPLES*.9):]))\
+    .shuffle(buffer_size=int(N_SAMPLES*.1))\
+    .take(count=int(N_SAMPLES*.1))
 
 
 class MultiOutputNN(Model):
@@ -110,15 +115,3 @@ def main(epochs=10):
 
 if __name__ == '__main__':
     main(epochs=10)
-
------------------------------------------------------------------------------------
- 100 ENTROPY LOSS 0.0184505 REGRESSION LOSS 15.0715010 CATEGORICAL ACCURACY 100.00%
- 200 ENTROPY LOSS 0.0615500 REGRESSION LOSS 14.9148484 CATEGORICAL ACCURACY  97.66%
- 300 ENTROPY LOSS 0.0413265 REGRESSION LOSS 12.9771883 CATEGORICAL ACCURACY  99.22%
- 400 ENTROPY LOSS 0.0219294 REGRESSION LOSS 13.2905119 CATEGORICAL ACCURACY  99.22%
- 500 ENTROPY LOSS 0.0515684 REGRESSION LOSS 14.3146840 CATEGORICAL ACCURACY  98.44%
- 600 ENTROPY LOSS 0.0965306 REGRESSION LOSS 14.9203674 CATEGORICAL ACCURACY  97.66%
- 700 ENTROPY LOSS 0.0901383 REGRESSION LOSS 15.9583182 CATEGORICAL ACCURACY  95.31%
- 
-  10 ENTROPY LOSS 0.0638319 REGRESSION LOSS 13.9225597 CATEGORICAL ACCURACY  97.67%
------------------------------------------------------------------------------------
