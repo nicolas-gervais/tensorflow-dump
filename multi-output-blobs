@@ -1,0 +1,124 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.layers import Dense, Dropout
+from sklearn.datasets import make_blobs
+from tensorflow.keras import Model
+tf.keras.backend.set_floatx('float64')
+
+N_FEATURES = 8
+N_CENTERS = 15
+N_SAMPLES = 100_000
+x, y = make_blobs(n_samples=N_SAMPLES, n_features=N_FEATURES, centers=N_CENTERS, cluster_std=3)
+z = np.sum(x, axis=1) + np.random.rand(len(x))
+
+train_data = tf.data.Dataset.from_tensor_slices((x[:int(N_SAMPLES*.9)],
+                                                 y[:int(N_SAMPLES*.9)],
+                                                 z[:int(N_SAMPLES*.9)])).shuffle(128).batch(128)
+test_data = tf.data.Dataset.from_tensors((x[int(N_SAMPLES*.9):],
+                                          y[int(N_SAMPLES*.9):],
+                                          z[int(N_SAMPLES*.9):]))
+
+
+class MultiOutputNN(Model):
+    def __init__(self):
+        super(MultiOutputNN, self).__init__()
+        self.dens1 = Dense(units=32, input_shape=(N_FEATURES,), activation='relu')
+        self.dens2 = Dense(units=64, activation='relu')
+        self.dens3 = Dense(units=128, activation='relu')
+        self.dens4 = Dense(units=128, activation='relu')
+        self.cat = Dense(N_CENTERS)
+        self.reg = Dense(1)
+
+    def __call__(self, x):
+        x = self.dens1(x)
+        x = self.dens2(x)
+        cat_in = self.dens3(x)
+        reg_in = self.dens4(x)
+        cat_out = self.cat(cat_in)
+        reg_out = self.reg(reg_in)
+        return cat_out, reg_out
+
+
+model = MultiOutputNN()
+
+@tf.function
+def compute_loss(y_pred_cat, y_true_cat, y_pred_reg, y_true_reg):
+    cat_loss = tf.reduce_mean(
+        tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=y_pred_cat, labels=y_true_cat))
+    reg_loss = tf.reduce_mean(tf.losses.mean_absolute_error(y_true=y_true_reg, y_pred=y_pred_reg))
+    return cat_loss, reg_loss
+
+
+@tf.function
+def compute_accuracy(logits, labels):
+    predictions = tf.argmax(logits, axis=1)
+    return tf.reduce_mean(tf.cast(tf.equal(predictions, labels), tf.float32))
+
+
+@tf.function
+def train_step(inputs, cat_targets, reg_targets):
+    with tf.GradientTape() as tape:
+        cat_out, reg_out = model(inputs)
+        cat_loss, reg_loss = compute_loss(y_pred_cat=cat_out,
+                                          y_true_cat=cat_targets,
+                                          y_pred_reg=reg_out,
+                                          y_true_reg=reg_targets)
+    gradients = tape.gradient([cat_loss, reg_loss], model.trainable_variables)
+    opt.apply_gradients(zip(gradients, model.trainable_variables))
+    accuracy = compute_accuracy(cat_out, cat_targets)
+    return cat_loss, reg_loss, accuracy
+
+
+@tf.function
+def test_step(inputs, cat_targets, reg_targets):
+    cat_out, reg_out = model(inputs)
+    cat_loss, reg_loss = compute_loss(y_pred_cat=cat_out,
+                                      y_true_cat=cat_targets,
+                                      y_pred_reg=reg_out,
+                                      y_true_reg=reg_targets)
+    accuracy = compute_accuracy(cat_out, cat_targets)
+    return cat_loss, reg_loss, accuracy
+
+
+def train():
+    for index, (xx, yy, zz) in enumerate(train_data, 1):
+        cat_loss, reg_loss, cat_acc = train_step(xx, yy, zz)
+        if index % 100 == 0:
+            print(f'{index:>4} ENTROPY LOSS {cat_loss:.7f} '
+                  f'REGRESSION LOSS {reg_loss:>10.7f} '
+                  f'CATEGORICAL ACCURACY {cat_acc:>7.2%}')
+
+
+def test(epoch):
+    for index, (xx, yy, zz) in enumerate(test_data, 1):
+        cat_loss, reg_loss, cat_acc = test_step(xx, yy, zz)
+        print(f'\n{epoch:>4} ENTROPY LOSS {cat_loss:.7f} '
+              f'REGRESSION LOSS {reg_loss:>10.7f} '
+              f'CATEGORICAL ACCURACY {cat_acc:>7.2%}\n')
+
+opt = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+
+def main(epochs=10):
+    for epoch in range(1, epochs + 1):
+        train()
+        test(epoch)
+
+
+if __name__ == '__main__':
+    main(epochs=10)
+
+-----------------------------------------------------------------------------------
+ 100 ENTROPY LOSS 0.0184505 REGRESSION LOSS 15.0715010 CATEGORICAL ACCURACY 100.00%
+ 200 ENTROPY LOSS 0.0615500 REGRESSION LOSS 14.9148484 CATEGORICAL ACCURACY  97.66%
+ 300 ENTROPY LOSS 0.0413265 REGRESSION LOSS 12.9771883 CATEGORICAL ACCURACY  99.22%
+ 400 ENTROPY LOSS 0.0219294 REGRESSION LOSS 13.2905119 CATEGORICAL ACCURACY  99.22%
+ 500 ENTROPY LOSS 0.0515684 REGRESSION LOSS 14.3146840 CATEGORICAL ACCURACY  98.44%
+ 600 ENTROPY LOSS 0.0965306 REGRESSION LOSS 14.9203674 CATEGORICAL ACCURACY  97.66%
+ 700 ENTROPY LOSS 0.0901383 REGRESSION LOSS 15.9583182 CATEGORICAL ACCURACY  95.31%
+ 
+  10 ENTROPY LOSS 0.0638319 REGRESSION LOSS 13.9225597 CATEGORICAL ACCURACY  97.67%
+-----------------------------------------------------------------------------------
