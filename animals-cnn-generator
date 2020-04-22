@@ -1,0 +1,52 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.layers import Dense, Conv2D, MaxPool2D, Flatten, AlphaDropout
+from tensorflow.keras import Input, Model
+tf.keras.backend.set_floatx('float64')
+
+img_generator = ImageDataGenerator(
+    rotation_range=360,
+    zoom_range=2e-1,
+    horizontal_flip=True,
+    vertical_flip=True,
+    rescale=1/255,
+    validation_split=2e-1)
+
+BATCH_SIZE = 16
+TARGET_SIZE = [48, 48]
+
+train_iterator = img_generator.flow_from_directory(directory='/home/nicolas/Documents/Datasets/animals',
+                                                   batch_size=BATCH_SIZE,
+                                                   target_size=TARGET_SIZE,
+                                                   subset='training')
+
+test_iterator = img_generator.flow_from_directory(directory='/home/nicolas/Documents/Datasets/animals',
+                                                  batch_size=BATCH_SIZE,
+                                                  target_size=TARGET_SIZE,
+                                                  subset='validation')
+
+inputs = Input(shape=(*TARGET_SIZE, 3))
+x = Conv2D(filters=16, kernel_size=(5, 5), activation='relu')(inputs)
+x = MaxPool2D(pool_size=(2, 2))(x)
+x = Conv2D(filters=32, kernel_size=(3, 3), activation='relu')(x)
+x = MaxPool2D(pool_size=(2, 2))(x)
+x = Conv2D(filters=32, kernel_size=(3, 3), activation='relu')(x)
+x = MaxPool2D(pool_size=(2, 2))(x)
+x = Flatten()(x)
+x = Dense(units=64, activation='relu')(x)
+x = AlphaDropout(5e-1)(x)
+x = Dense(units=128, activation='relu')(x)
+out = Dense(units=len(train_iterator.class_indices))(x)
+
+model = Model(inputs=inputs, outputs=out)
+
+model.compile(optimizer='adam',
+              loss=tf.nn.softmax_cross_entropy_with_logits,
+              metrics=['accuracy'])
+
+model.fit(x=train_iterator,
+          steps_per_epoch=len(train_iterator),
+          epochs=50,
+          validation_data=test_iterator)
