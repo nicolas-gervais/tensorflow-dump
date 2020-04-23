@@ -1,0 +1,74 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from sklearn.datasets import load_breast_cancer
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense
+tf.keras.backend.set_floatx('float64')
+
+x, y = load_breast_cancer(return_X_y=True)
+
+data = tf.data.Dataset.from_tensor_slices((x, y)).shuffle(len(x))
+
+train_data = data.take(int(8e-1*len(x))).batch(32)
+test_data = data.skip(int(8e-1*len(x)))
+
+
+class DenseNet(Model):
+    def __init__(self):
+        super(DenseNet, self).__init__()
+        self.D1 = Dense(8, activation=tf.keras.activations.selu)
+        self.D2 = Dense(16, activation=tf.keras.activations.elu)
+        self.D3 = Dense(32, activation=tf.keras.activations.relu)
+        self.D4 = Dense(2)
+
+    def __call__(self, x):
+        x = self.D1(x)
+        x = self.D2(x)
+        x = self.D3(x)
+        out = self.D4(x)
+        return out
+
+
+network = DenseNet()
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+
+
+@tf.function
+def compute_loss(labels, logits):
+    labels = tf.cast(tf.one_hot(labels, depth=2), tf.float64)
+    return tf.reduce_mean(
+        tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits))
+
+
+@tf.function
+def compute_accuracy(labels, logits):
+    logits = tf.argmax(logits, axis=1)
+    return tf.reduce_mean(tf.cast(tf.equal(logits, labels), tf.float32))
+
+
+@tf.function
+def train_step(inputs, targets):
+    with tf.GradientTape() as tape:
+        logits = network(inputs)
+        loss = compute_loss(labels=targets, logits=logits)
+
+    gradients = tape.gradient(loss, network.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, network.trainable_variables))
+    accuracy = compute_accuracy(labels=targets, logits=logits)
+    return loss, accuracy
+
+
+def train(iter=1):
+    for inputs, labels in train_data:
+        loss, acc = train_step(inputs, labels)
+    tf.print(f'ITER {iter:>3} LOSS {loss:>5.2f} ACCURACY {acc:>6.2%}')
+
+def main(epochs=5):
+    for i in range(1, epochs + 1):
+        train(i)
+
+
+if __name__ == '__main__':
+    main(epochs=50)
