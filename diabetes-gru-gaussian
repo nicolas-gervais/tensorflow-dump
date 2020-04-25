@@ -1,0 +1,93 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from sklearn.datasets import load_diabetes
+import tensorflow as tf
+tf.keras.backend.set_floatx('float64')
+from tensorflow.keras.layers import Dense, GaussianDropout, GRU, Concatenate, Reshape
+from tensorflow.keras.models import Model
+
+X, y = load_diabetes(return_X_y=True)
+
+data = tf.data.Dataset.from_tensor_slices((X, y)).\
+    shuffle(len(X)).\
+    map(lambda x, y: (tf.divide(x, tf.reduce_max(x)), y))
+
+training = data.take(400).batch(8)
+testing = data.skip(400)
+
+class NeuralNetwork(Model):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()
+        self.dense1 = Dense(16, input_shape=(10,), activation='relu', name='Dense1')
+        self.dense2 = Dense(32, activation='relu', name='Dense2')
+        self.resha1 = Reshape((1, 32), name='Reshape1')
+        self.gru1 = GRU(16, activation='tanh', recurrent_dropout=1e-1, name='GRU1')
+        self.dense3 = Dense(64, activation='relu', name='Dense3')
+        self.gauss1 = GaussianDropout(5e-1, name='GaussianDropout1')
+        self.conca1 = Concatenate(name='Concatenate1')
+        self.dense4 = Dense(128, activation='relu', name='Dense4')
+        self.dense5 = Dense(1, name='Dense5')
+
+    def call(self, x, *args, **kwargs):
+        x = self.dense1(x)
+        x = self.dense2(x)
+        a = self.resha1(x)
+        a = self.gru1(a)
+        b = self.dense3(x)
+        b = self.gauss1(b)
+        x = self.conca1([a, b])
+        x = self.dense4(x)
+        x = self.dense5(x)
+        return x
+
+
+skynet = NeuralNetwork()
+skynet.build(input_shape=(None, 10))
+skynet.summary()
+
+loss_object = tf.keras.losses.MeanAbsoluteError()
+
+train_loss = tf.keras.metrics.Mean()
+test_loss = tf.keras.metrics.Mean()
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+
+@tf.function
+def train_step(inputs, targets):
+    with tf.GradientTape() as tape:
+        outputs = skynet(inputs, training=True)
+        loss = loss_object(targets, outputs)
+
+    gradients = tape.gradient(loss, skynet.trainable_variables, output_gradients=None)
+    optimizer.apply_gradients(zip(gradients, skynet.trainable_variables))
+
+    train_loss(loss)
+
+
+@tf.function
+def test_step(inputs, targets):
+    outputs = skynet(inputs, training=False)
+    loss = loss_object(targets, outputs)
+    test_loss(loss)
+
+callback = list()
+stop = 100
+
+for epoch in range(1, 1000 + 1):
+    train_loss.reset_states()
+    test_loss.reset_states()
+
+    for inputs, targets in training:
+        train_step(inputs=inputs, targets=targets)
+
+    test_step(inputs=inputs, targets=targets)
+
+    callback.append(test_loss.result())
+
+    if epoch % 10 == 0:
+        print(f'EPOCH {epoch:>3} TRAIN LOSS {train_loss.result().numpy():>6.2f} '
+              f'TEST LOSS {test_loss.result().numpy():>6.2f}')
+
+    if len(callback) > stop and tf.greater_equal(tf.reduce_min(callback[-stop:]), callback[-stop]):
+        break
