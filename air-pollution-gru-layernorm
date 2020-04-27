@@ -1,0 +1,55 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.layers import LSTM, Dense, GRU, Concatenate, LayerNormalization
+from tensorflow.keras import Model, Input
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.utils import plot_model
+
+os.chdir('/home/nicolas/Documents/Datasets/AirPollutionSeoul')
+
+df = pd.read_csv('Measurement_summary.csv', na_values=-1)
+df = df[df['Station code'] == 101].drop(['Address', 'Latitude', 'Longitude', 'Station code'], axis=1)
+
+X = df['PM10'].fillna(method='bfill', axis=0).values
+
+def univariate_data(dataset, start_index, end_index, history_size, target_size):
+    data, labels = [], []
+
+    start_index = start_index + history_size
+    if end_index is None:
+        end_index = len(dataset) - target_size
+
+    for i in range(start_index, end_index):
+        indices = np.arange(i-history_size, i)
+        data.append(np.reshape(dataset[indices], (history_size, 1)))
+        labels.append(dataset[i+target_size])
+    return np.array(data), np.array(labels)
+
+univariate = univariate_data(X, 0, 25010, 10, 0)
+
+traindata = tf.data.Dataset.from_tensor_slices(univariate).take(20_000).batch(32)
+testdata = tf.data.Dataset.from_tensor_slices(univariate).skip(20_000).take(5_000).batch(16)
+
+inputs = Input(shape=(10, 1), name='InputLayer')
+x = LSTM(8, return_sequences=True, name='LSTM')(inputs)
+a = Dense(16, activation='elu', name='Dense')(x)
+b = GRU(16, return_sequences=True, name='GRU')(x)
+a = LayerNormalization(name='LayerNorm')(a)
+x = Concatenate(axis=-1, name='Concatenate')([a, b])
+out = Dense(1, name='OutputLayer')(x)
+
+model = Model(inputs=inputs, outputs=out)
+model.build(input_shape=univariate[0].shape[1:])
+_ = plot_model(model, to_file='/home/nicolas/Desktop/model.png')
+
+model.compile(loss='mae', optimizer='rmsprop')
+
+es = EarlyStopping(monitor='val_loss', patience=10)
+
+history = model.fit(traindata,
+                    epochs=500,
+                    validation_data=testdata,
+                    callbacks=[es])
