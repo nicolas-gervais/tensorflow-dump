@@ -1,0 +1,88 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.models import Model
+
+inputs = tf.cast(tf.random.uniform(minval=0, maxval=2, shape=(5000, 2), dtype=tf.int32), tf.float32)
+outputs = tf.one_hot(tf.cast(tf.equal(*zip(tf.transpose(inputs)))[0], tf.int32), depth=2)
+
+data = tf.data.Dataset.from_tensor_slices((inputs, outputs)).shuffle(len(inputs))
+
+train_data = data.take(4_000).batch(16)
+test_data = data.skip(4_000).batch(8)
+
+
+class XOR(Model):
+    def __init__(self):
+        super(XOR, self).__init__()
+        self.layer1 = Dense(2, activation='tanh')
+        self.layer2 = Dense(3, activation='tanh')
+        self.layer3 = Dense(2)
+
+    def __call__(self, x, *args, **kwargs):
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return x
+
+
+xor = XOR()
+
+loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+
+train_loss = tf.keras.metrics.Mean()
+train_acc = tf.keras.metrics.CategoricalAccuracy()
+
+test_loss = tf.keras.metrics.Mean()
+test_acc = tf.keras.metrics.CategoricalAccuracy()
+
+optimizer = tf.keras.optimizers.SGD()
+
+
+@tf.function
+def train_step(inputs, labels):
+    with tf.GradientTape() as tape:
+        out = xor(inputs)
+        loss = loss_object(labels, out)
+
+    gradients = tape.gradient(loss, xor.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, xor.trainable_variables))
+    train_loss(loss)
+    train_acc(labels, out)
+
+
+@tf.function
+def test_step(inputs, labels):
+    out = xor(inputs)
+    loss = loss_object(labels, out)
+    test_loss(loss)
+    test_acc(labels, out)
+
+
+def train():
+    train_loss.reset_states()
+    train_acc.reset_states()
+    test_loss.reset_states()
+    test_acc.reset_states()
+
+    for x, y in train_data:
+        train_step(x, y)
+
+    for x, y in test_data:
+        test_step(x, y)
+
+
+def main(epochs=50):
+    for epoch in range(1, epochs + 1):
+        train()
+        template = '{:>2} {:.3f} {:.3f} {:.3f} {:.3f}'
+        print(template.format(epoch,
+                              train_loss.result(), 
+                              train_acc.result(), 
+                              test_loss.result(), 
+                              test_acc.result()))
+
+
+if __name__ == '__main__':
+    main()
