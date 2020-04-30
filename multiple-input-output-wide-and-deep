@@ -1,0 +1,39 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from sklearn.datasets import load_iris
+from tensorflow.keras.layers import Dense, Concatenate
+from tensorflow.keras import Input, Model
+from tensorflow.keras.utils import plot_model
+import tensorflow as tf
+
+data, target = load_iris(return_X_y=True)
+X1 = data[:, (0, 1)]
+X2 = data[:, 2]
+Y = data[:, 3]
+Z = target
+
+inputs1 = Input(shape=(2,), name='wide_input')
+inputs2 = Input(shape=(1,), name='deep_input')
+
+x = Dense(16, activation='relu', name='16_1')(inputs1)
+x = Dense(32, activation='relu', name='32_1')(x)
+x = Concatenate(name='concat_1')([x, inputs1])
+x = Dense(8, activation='tanh', name='8_1')(x)
+z = Dense(16, activation='elu', name='16_2')(inputs2)
+xz = Concatenate(name='concat_2')([x, z])
+output1 = Dense(1, name='cont_out')(xz)
+output2 = Dense(3, activation='softmax', name='cat_out')(x)
+
+model = Model(inputs=[inputs1, inputs2], outputs=[output1, output2])
+
+model.compile(loss={'cont_out': 'mean_absolute_error',
+                    'cat_out': 'sparse_categorical_crossentropy'},
+              loss_weights={'cont_out': .4,
+                            'cat_out': .6},
+              optimizer='adam',
+              metrics={'cat_out': tf.keras.metrics.sparse_categorical_accuracy})
+
+plot_model(model, to_file='/home/nicolas/Desktop/wideanddeep.png')
+
+history = model.fit({'wide_input': X1, 'deep_input': X2},
+                    {'cont_out': Y, 'cat_out': Z}, epochs=150, batch_size=8)
