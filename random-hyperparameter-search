@@ -1,0 +1,60 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from sklearn.datasets import make_multilabel_classification
+from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense
+
+N_FEATURES = 8
+N_CLASSES = 3
+
+X, y = make_multilabel_classification(n_samples=5_000,
+                                      n_features=N_FEATURES,
+                                      n_classes=N_CLASSES,
+                                      n_labels=2)
+
+
+def build_model(units=4, activation='relu', bonus_layers=0):
+    class DenseNetwork(Model):
+        def __init__(self, activation='relu', bonus_layers=0, units=4):
+            super(DenseNetwork, self).__init__()
+            self.bonus_layers = bonus_layers
+            self.layer1 = Dense(units, input_shape=(N_FEATURES,), activation=activation)
+            self.layer2 = Dense(units, activation=activation)
+            self.layer3 = Dense(N_CLASSES, activation='sigmoid')
+            self.layer4 = Dense(units, activation=activation)
+            self.layer5 = Dense(units, activation=activation)
+
+        def __call__(self, x, *args, **kwargs):
+            x = self.layer1(x)
+            x = self.layer2(x)
+            if self.bonus_layers == 1:
+                x = self.layer4(x)
+            if self.bonus_layers == 2:
+                x = self.layer5(x)
+            x = self.layer3(x)
+            return x
+
+
+    network = DenseNetwork(units=units, activation=activation, bonus_layers=bonus_layers)
+    network.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return network
+
+
+model = build_model(units=6, bonus_layers=1, activation='elu')
+
+keras_clf = KerasClassifier(build_model)
+
+
+from sklearn.model_selection import RandomizedSearchCV
+
+params_dict = {
+    'units' : [4, 6, 8, 10, 12, 16],
+    'bonus_layers' : [0, 1, 2],
+    'activation': ['relu', 'elu', 'selu', 'tanh', 'sigmoid']
+}
+
+rand_search = RandomizedSearchCV(keras_clf, params_dict, n_iter=50, cv=3)
+rand_search.fit(X, y, epochs=100)
+
+print(rand_search.best_params_)
