@@ -1,0 +1,160 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import pandas_datareader.data as web
+import datetime as dt
+import numpy as np
+from tensorflow.keras import Model
+import tensorflow as tf
+from tensorflow.keras.layers import LSTM, Bidirectional, Dense, GRU
+from tensorflow.keras.activations import relu
+from tensorflow.keras.metrics import mean_absolute_error
+tf.keras.backend.set_floatx('float64')
+
+start = dt.datetime(2000,1,1)
+end = dt.datetime(2019,1,1)
+
+df = web.DataReader(name=['IBM', 'MSFT', 'NKE'],
+                    data_source='yahoo',
+                    start=start,
+                    end=end).reset_index()['Close']
+
+values = df.values
+
+train_len = np.round(len(values)*.8, -2).astype(int)
+print('The length of the training set will be %i.' % train_len)
+
+average_3_day = df['NKE'].rolling(3).mean().values[train_len:]
+previous_1_day = df['NKE'].shift(-1).values[train_len:]
+
+naive_3_day = mean_absolute_error(df['NKE'].values[train_len:], average_3_day)
+naive_1_day = mean_absolute_error(df['NKE'].values[train_len:-1], previous_1_day[:-1])
+print('The score of 3 day moving average is {:.4f}.'.format(naive_3_day.numpy()))
+print('The score of the previous day is {:.4f}.'.format(naive_1_day.numpy()))
+
+for val, fut in zip(df['NKE'].values[:10], previous_1_day[:10]):
+    print(f'Value: {val:>6.3f} Future: {fut:>6.3f}')
+
+MEAN = np.mean(values[:train_len, :], axis=0)
+STD = np.std(values[:train_len, :], axis=0)
+
+data = (values - MEAN)/STD
+
+
+def multivariate_data(dataset, target, start_index, end_index,
+                      history_size, target_size, step, single_step=False):
+    data, labels = [], []
+    start_index = start_index + history_size
+    if end_index is None:
+        end_index = len(dataset) - target_size
+    for i in range(start_index, end_index):
+        indices = range(i-history_size, i, step)
+        data.append(dataset[indices])
+        if single_step:
+          labels.append(target[i+target_size])
+        else:
+          labels.append(target[i:i+target_size])
+    return np.array(data), np.array(labels)
+
+
+PAST_HISTORY = 8
+FUTURE_TARGET = 3
+STEP = 5
+
+x_train, y_train = multivariate_data(dataset=data,
+                                     target=data[:, -1],
+                                     start_index=0,
+                                     end_index=train_len,
+                                     history_size=PAST_HISTORY,
+                                     target_size=FUTURE_TARGET,
+                                     step=STEP)
+
+x_test, y_test = multivariate_data(dataset=data,
+                                   target=data[:, -1],
+                                   start_index=train_len,
+                                   end_index=None,
+                                   history_size=PAST_HISTORY,
+                                   target_size=FUTURE_TARGET,
+                                   step=STEP)
+
+print(f'Length of the training set: {len(x_train)}. '
+      f'Length of the test set: {len(x_test)}.')
+
+train_data = tf.data.Dataset.from_tensor_slices((x_train, y_train))\
+    .shuffle(len(x_train))\
+    .take(-1)\
+    .batch(8)
+
+test_data = tf.data.Dataset.from_tensor_slices((x_test, y_test))\
+    .shuffle(len(x_test))\
+    .take(-1)\
+    .batch(16)
+
+
+class BiDirectionalLSTM(Model):
+    def __init__(self):
+        super(BiDirectionalLSTM, self).__init__()
+        self.bidr = Bidirectional(LSTM(16, return_sequences=True))
+        self.gru = GRU(16, activation='tanh')
+        self.dense = Dense(3)
+
+    def call(self, inputs, training=None, mask=None):
+        x = self.bidr(relu(inputs, alpha=2e-1))
+        x = self.gru(x)
+        x = self.dense(x)
+        return x
+
+
+bidirec = BiDirectionalLSTM()
+
+loss_object = tf.keras.losses.MeanAbsoluteError()
+
+train_loss = tf.keras.metrics.Mean()
+test_loss = tf.keras.metrics.Mean()
+
+optim = tf.keras.optimizers.Adadelta()
+
+
+@tf.function
+def train_step(inputs, targets):
+    with tf.GradientTape() as tape:
+        out = bidirec(inputs)
+        loss = loss_object(targets, out)
+        train_loss(loss)
+
+    gradients = tape.gradient(loss, bidirec.trainable_variables)
+    optim.apply_gradients(zip(gradients, bidirec.trainable_variables))
+
+
+@tf.function
+def test_step(inputs, targets):
+    out = bidirec(inputs)
+    loss = loss_object(targets, out)
+    test_loss(loss)
+
+
+def learn(epochs=1000, early_stopping=100):
+    loss_history = []
+    for epoch in range(1, epochs + 1):
+        train_loss.reset_states()
+        test_loss.reset_states()
+        test_template = '{:>3} - TRAIN LOSS {:>6.4f} TEST LOSS {:>6.4f}'
+
+        for samples, targets in train_data:
+            train_step(samples, targets)
+
+        for samples, targets in test_data:
+            test_step(samples, targets)
+
+        print(test_template.format(
+            epoch,
+            train_loss.result().numpy(),
+            test_loss.result()))
+
+        loss_history.append(test_loss.result().numpy())
+        if len(loss_history) > early_stopping and \
+            min(loss_history[-early_stopping:]) > loss_history[-early_stopping - 1]:
+            print('Early stopping: %i epochs without decrease in validation loss.' % early_stopping)
+            break
+
+if __name__ == '__main__':
+    learn(epochs=25_000, early_stopping=250)
