@@ -1,0 +1,34 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+from sklearn.datasets import make_blobs
+from tensorflow.keras.layers import Dense
+from tensorflow.keras import Model, Input
+from tensorflow.keras.callbacks import Callback
+
+X, y = make_blobs(n_features=10,
+                  n_samples=5000,
+                  cluster_std=1.5,
+                  centers=5)
+
+
+inputs = Input(shape=(10,))
+
+x = Dense(8, activation='selu', kernel_initializer='lecun_normal')(inputs)
+x = Dense(16, activation='elu', kernel_initializer='he_normal')(x)
+outputs = Dense(5, activation='softmax')(x)
+
+MyModel = Model(inputs=[inputs], outputs=[outputs])
+
+
+class CustomCallback(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        if logs.get('accuracy') >= 9e-1:
+            print('\nAccuracy above 80%, interrupting training.')
+            self.model.stop_training = True
+
+
+MyModel.compile(loss='sparse_categorical_crossentropy', optimizer='sgd', metrics=['accuracy'])
+
+callback = CustomCallback()
+history = MyModel.fit(X, y, callbacks=[callback], epochs=20)
