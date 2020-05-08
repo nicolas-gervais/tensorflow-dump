@@ -1,0 +1,110 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+print(f'Tensorflow version {tf.__version__}')
+from tensorflow import keras
+from tensorflow.keras.layers import Dense, Conv1D, GlobalAveragePooling1D, Embedding, Flatten
+import tensorflow_datasets as tfds
+from tensorflow.keras.models import Model
+import collections
+
+(train_data, test_data), info = tfds.load('imdb_reviews/subwords8k',
+                                          split=[tfds.Split.TRAIN, tfds.Split.TEST],
+                                          as_supervised=True, with_info=True)
+
+padded_shapes = ([9000], ())
+
+train_dataset = train_data.shuffle(9000).\
+    padded_batch(padded_shapes=padded_shapes, batch_size=32)
+test_dataset = test_data.shuffle(9000).\
+    padded_batch(padded_shapes=padded_shapes, batch_size=32)
+
+n_words = info.features['text'].encoder.vocab_size
+
+
+class GAPModel(Model):
+    def __init__(self):
+        super(GAPModel, self).__init__()
+        self.embe = Embedding(n_words, output_dim=16)
+        self.glob = GlobalAveragePooling1D()
+        self.dens = Dense(2)
+
+    def call(self, x, training=None, mask=None):
+        x = self.embe(x)
+        x = self.glob(x)
+        x = self.dens(x)
+        return x
+
+
+conv = GAPModel()
+
+conv(next(iter(train_dataset))[0])
+
+loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+train_loss = tf.keras.metrics.Mean()
+test_loss = tf.keras.metrics.Mean()
+
+train_acc = tf.keras.metrics.CategoricalAccuracy()
+test_acc = tf.keras.metrics.CategoricalAccuracy()
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+
+@tf.function
+def train_step(inputs, labels):
+    with tf.GradientTape() as tape:
+        logits = conv(inputs, training=True)
+        loss = loss_object(labels, logits)
+        train_loss(loss)
+        train_acc(logits, labels)
+
+    gradients = tape.gradient(loss, conv.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, conv.trainable_variables))
+
+
+@tf.function
+def test_step(inputs, labels):
+    logits = conv(inputs, training=False)
+    loss = loss_object(labels, logits)
+    test_loss(loss)
+    test_acc(logits, labels)
+
+
+def learn():
+    train_loss.reset_states()
+    test_loss.reset_states()
+    train_acc.reset_states()
+    test_acc.reset_states()
+
+    for text, target in train_dataset:
+        train_step(inputs=text, labels=target)
+
+    for text, target in test_dataset:
+        test_step(inputs=text, labels=target)
+
+
+def main(epochs=10, patience=2):
+    loss_history = collections.deque(maxlen=11)
+    for epoch in tf.range(1, epochs + 1):
+        learn()
+
+        template = 'EPOCH {:>3} TRAIN LOSS {:>5.3f} TRAIN ACC {:.3f} TEST LOSS {:>5.3f} TEST ACC {:.3f}'
+
+        print(template.format(
+            epoch,
+            train_loss.result(),
+            train_acc.result(),
+            test_loss.result(),
+            test_acc.result()
+        ))
+
+        loss_history.append(train_loss.result())
+
+        if len(loss_history) > patience and loss_history.popleft() < min(loss_history):
+            print(f'\nEarly stopping. No loss decrease in {patience} epochs.')
+
+
+if __name__ == '__main__':
+    main(epochs=50, patience=5)
+
