@@ -1,0 +1,114 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow_datasets as tfds
+import tensorflow as tf
+import tensorflow_transform as tft
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense, Concatenate, LSTM
+from collections import deque
+
+data, info = tfds.load('iris', split='train',
+                       as_supervised=True,
+                       shuffle_files=True,
+                       with_info=True)
+
+def preprocessing(inputs, targets):
+    scaled = tf.divide(inputs, tf.reduce_max(inputs, axis=0))
+    return scaled, targets
+
+
+dataset = data.map(preprocessing).shuffle(info.splits['train'].num_examples)
+
+train_dataset = dataset.take(120).batch(4)
+test_dataset = dataset.skip(120).take(30).batch(4)
+
+
+class DenseModel(Model):
+    def __init__(self):
+        super(DenseModel, self).__init__()
+        self.dens1 = Dense(8, activation='elu')
+        self.dens2 = Dense(16, activation='relu')
+        self.lstm1 = LSTM(8)
+        self.conca = Concatenate()
+        self.layer3 = Dense(info.features['label'].num_classes)
+
+    def call(self, inputs, training=None, **kwargs):
+        x = self.dens1(inputs)
+        y = self.dens2(x)
+        z = self.lstm1(tf.expand_dims(x, 1))
+        x = self.conca([y, z])
+        out = self.layer3(x)
+        return out
+
+
+model = DenseModel()
+
+loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+train_loss = tf.keras.metrics.Mean()
+test_loss = tf.keras.metrics.Mean()
+
+train_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+test_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+
+
+opt = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+
+@tf.function
+def train_step(inputs, labels):
+    with tf.GradientTape() as tape:
+        logits = model(inputs)
+        loss = loss_object(labels, logits)
+
+    gradients = tape.gradient(loss, model.trainable_variables)
+    opt.apply_gradients(zip(gradients, model.trainable_variables))
+    train_loss(loss)
+    train_acc(labels, logits)
+
+
+@tf.function
+def test_step(inputs, labels):
+    logits = model(inputs)
+    loss = loss_object(labels, logits)
+    test_loss(loss)
+    test_acc(labels, logits)
+
+
+def fit(epoch):
+    template = 'Epoch {:>2} Train Loss {:.3f} Test Loss {:.3f} ' \
+               'Train Acc {:.2f} Test Acc {:.2f}'
+
+    train_loss.reset_states()
+    test_loss.reset_states()
+    train_acc.reset_states()
+    test_acc.reset_states()
+
+    for X_train, y_train in train_dataset:
+        train_step(X_train, y_train)
+
+    for X_test, y_test in test_dataset:
+        test_step(X_test, y_test)
+
+    print(template.format(
+        epoch + 1,
+        train_loss.result(),
+        test_loss.result(),
+        train_acc.result(),
+        test_acc.result()
+    ))
+
+
+def main(epochs=50, early_stopping=10):
+    loss_history = deque(maxlen=early_stopping + 1)
+
+    for epoch in range(epochs):
+        fit(epoch)
+        loss_history.append(train_loss.result().numpy())
+        if len(loss_history) > early_stopping and loss_history.popleft() < min(loss_history):
+            print(f'\nEarly stopping. No validation loss '
+                  f'improvement in {early_stopping} epochs.')
+            break
+
+if __name__ == '__main__':
+    main(epochs=100, early_stopping=10)
