@@ -1,0 +1,150 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+from tensorflow.keras.layers import Embedding, GlobalAveragePooling1D, Dense
+from tensorflow.keras import Model
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from collections import deque
+import csv
+
+os.chdir('/home/nicolas/Documents/Datasets')
+
+
+def load_data(max=None):
+    reviews = list()
+    labels = list()
+
+    with open('rotten_tomatoes_string.csv') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for ix, row in enumerate(reader, 1):
+            reviews.append(row['Review'].lower())
+            labels.append([0 if row['Freshness'] == 'rotten' else 1][0])
+            if max and ix == max:
+                break
+    return reviews, labels
+
+
+reviews, labels = load_data(max=None)
+
+assert len(reviews) == len(labels)
+
+train_size = int(8e-1*len(labels))
+
+train_sentences = reviews[:train_size]
+train_labels = labels[:train_size]
+
+test_sentences = reviews[train_size:]
+test_labels = labels[train_size:]
+
+assert len(train_labels) == 4*len(test_labels)
+
+tok = Tokenizer(num_words=100_000, lower=True, oov_token='<OOV>')
+
+tok.fit_on_texts(train_sentences)
+
+train_tokenized = tok.texts_to_sequences(train_sentences)
+test_tokenized = tok.texts_to_sequences(test_sentences)
+
+max_len = 50
+
+train_padded = pad_sequences(train_tokenized, maxlen=max_len, truncating='pre', padding='pre')
+test_padded = pad_sequences(test_tokenized, maxlen=max_len, truncating='pre', padding='pre')
+
+train_dataset = tf.data.Dataset.from_tensor_slices((train_padded, train_labels)).batch(8)
+test_dataset = tf.data.Dataset.from_tensor_slices((test_padded, test_labels)).batch(8)
+
+
+class GlobalAverageModel(Model):
+    def __init__(self):
+        super(GlobalAverageModel, self).__init__()
+        self.layer1 = Embedding(input_dim=tok.num_words, output_dim=128, input_length=max_len)
+        self.layer2 = GlobalAveragePooling1D()
+        self.layer3 = Dense(2)
+
+    def call(self, inputs, training=None, **kwargs):
+        x = self.layer1(inputs)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return x
+
+
+gam = GlobalAverageModel()
+
+loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+train_loss = tf.keras.metrics.Mean(name='Train Loss')
+test_loss = tf.keras.metrics.Mean(name='Test Loss')
+
+train_acc = tf.keras.metrics.SparseCategoricalAccuracy(name='Train Accuracy')
+test_acc = tf.keras.metrics.SparseCategoricalAccuracy(name='Test Accuracy')
+
+optimizer = tf.keras.optimizers.Adam()
+
+@tf.function
+def train_step(inputs, labels):
+    with tf.GradientTape() as tape:
+        logits = gam(inputs)
+        loss = loss_object(labels, logits)
+
+    gradients = tape.gradient(loss, gam.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, gam.trainable_variables))
+    train_loss(loss)
+    train_acc(labels, logits)
+
+
+@tf.function
+def test_step(inputs, labels):
+    logits = gam(inputs)
+    loss = loss_object(labels, logits)
+    test_loss(loss)
+    test_acc(labels, logits)
+
+
+def fit_model(epochs=50, patience=10):
+    verbose = 'Epoch {:>2} Train Loss {:>5.3f} Test Loss {:>5.3f} Train Acc {:>6.3%} Test Acc {:>6.3%}'
+    callback = deque(maxlen=patience + 1)
+
+    for epoch in range(epochs):
+        train_loss.reset_states()
+        test_loss.reset_states()
+        train_acc.reset_states()
+        test_acc.reset_states()
+
+        for reviews, ratings in train_dataset:
+            train_step(reviews, ratings)
+
+        for reviews, ratings in test_dataset:
+            test_step(reviews, ratings)
+
+        print(verbose.format(
+            epoch,
+            train_loss.result(),
+            test_loss.result(),
+            train_acc.result(),
+            test_acc.result()
+        ))
+
+        callback.append(test_loss.result())
+
+        if len(callback) > patience and callback.popleft() < min(callback):
+            assert len(callback) == patience, f'{len(callback)}'
+            print(f'\nEarly stopping. No test loss improvement in {patience} epochs.')
+            break
+
+
+if __name__ == '__main__':
+    fit_model(epochs=100, patience=5)
+    
+----------------------------------------------------------------------------
+Epoch 11 Train Loss 0.352 Test Loss 0.411 Train Acc 84.935% Test Acc 81.871%
+Epoch 12 Train Loss 0.351 Test Loss 0.411 Train Acc 85.000% Test Acc 81.875%
+Epoch 13 Train Loss 0.350 Test Loss 0.411 Train Acc 85.052% Test Acc 81.871%
+Epoch 14 Train Loss 0.349 Test Loss 0.411 Train Acc 85.093% Test Acc 81.880%
+Epoch 15 Train Loss 0.348 Test Loss 0.411 Train Acc 85.134% Test Acc 81.892%
+Epoch 16 Train Loss 0.348 Test Loss 0.411 Train Acc 85.169% Test Acc 81.900%
+Epoch 17 Train Loss 0.347 Test Loss 0.411 Train Acc 85.198% Test Acc 81.895%
+Epoch 18 Train Loss 0.346 Test Loss 0.411 Train Acc 85.233% Test Acc 81.902%
+Epoch 19 Train Loss 0.346 Test Loss 0.411 Train Acc 85.260% Test Acc 81.906%
+Epoch 20 Train Loss 0.345 Test Loss 0.411 Train Acc 85.280% Test Acc 81.903%
+----------------------------------------------------------------------------
