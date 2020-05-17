@@ -1,0 +1,130 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from tensorflow.keras import Model
+import tensorflow as tf
+from tensorflow.keras.layers import Dense, Conv2D, MaxPooling2D, Dropout, Flatten, Concatenate
+import tensorflow_datasets as tfds
+from tensorflow.keras.regularizers import l1, l2, l1_l2
+from collections import deque
+
+dataset, info = tfds.load('binary_alpha_digits',
+                          with_info=True,
+                          split='train',
+                          as_supervised=False)
+
+data = dataset.map(lambda x: (tf.cast(x['image'], tf.float32), x['label'])).shuffle(1400).take(1400)
+
+len_train = int(8e-1*info.splits['train'].num_examples)
+
+train = data.take(len_train).batch(8)
+test = data.skip(len_train).take(info.splits['train'].num_examples - len_train).batch(8)
+
+
+class CNN(Model):
+    def __init__(self):
+        super(CNN, self).__init__()
+        self.layer1 = Dense(32, activation=tf.nn.relu,
+                            kernel_regularizer=l1(1e-2),
+                            input_shape=info.features['image'].shape)
+        self.layer2 = Conv2D(filters=16,
+                             kernel_size=(3, 3),
+                             strides=(1, 1),
+                             activation='relu',
+                             input_shape=info.features['image'].shape)
+        self.layer3 = MaxPooling2D(pool_size=(2, 2))
+        self.layer4 = Conv2D(filters=32,
+                             kernel_size=(3, 3),
+                             strides=(1, 1),
+                             activation=tf.nn.elu,
+                             kernel_initializer=tf.keras.initializers.glorot_normal)
+        self.layer5 = MaxPooling2D(pool_size=(2, 2))
+        self.layer6 = Flatten()
+        self.layer7 = Dense(units=64,
+                            activation=tf.nn.relu,
+                            kernel_regularizer=l2(1e-2))
+        self.layer8 = Dense(units=64,
+                            activation=tf.nn.relu,
+                            kernel_regularizer=l1_l2(l1=1e-2, l2=1e-2))
+        self.layer9 = Concatenate()
+        self.layer10 = Dense(units=info.features['label'].num_classes)
+
+    def call(self, inputs, training=None, **kwargs):
+        b = self.layer1(inputs)
+        a = self.layer2(inputs)
+        a = self.layer3(a)
+        a = self.layer4(a)
+        a = self.layer5(a)
+        a = self.layer6(a)
+        a = self.layer8(a)
+        b = self.layer7(b)
+        b = self.layer6(b)
+        x = self.layer9([a, b])
+        x = self.layer10(x)
+        return x
+
+
+cnn = CNN()
+
+loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+train_loss = tf.keras.metrics.Mean()
+test_loss = tf.keras.metrics.Mean()
+
+train_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+test_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+
+optimizer = tf.keras.optimizers.Nadam()
+
+template = 'Epoch {:3} Train Loss {:7.4f} Test Loss {:7.4f} ' \
+           'Train Acc {:6.2%} Test Acc {:6.2%} '
+
+epochs = 750
+early_stop = epochs//50
+
+loss_hist = deque()
+
+for epoch in range(1, epochs + 1):
+    train_loss.reset_states()
+    test_loss.reset_states()
+    train_acc.reset_states()
+    test_acc.reset_states()
+
+    with tf.GradientTape() as tape:
+        for images, labels in train:
+            logits = cnn(images, training=True)
+            loss = loss_object(labels, logits)
+            train_loss(loss)
+            train_acc(labels, logits)
+
+        gradients = tape.gradient(loss, cnn.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, cnn.trainable_variables))
+
+    for images, labels in test:
+        logits = cnn(images, training=False)
+        loss = loss_object(labels, logits)
+        test_loss(loss)
+        test_acc(labels, logits)
+
+    print(template.format(epoch,
+                          train_loss.result(),
+                          test_loss.result(),
+                          train_acc.result(),
+                          test_acc.result()))
+
+    if len(loss_hist) > early_stop and loss_hist.popleft() < min(loss_hist):
+        print('Early stopping. No validation loss decrease in %i epochs.' % early_stop)
+        break
+
+-------------------------------------------------------------------------------
+Epoch 740 Train Loss  0.6639 Test Loss  0.5977 Train Acc 80.50% Test Acc 83.75% 
+Epoch 741 Train Loss  0.6635 Test Loss  0.6328 Train Acc 80.85% Test Acc 81.59% 
+Epoch 742 Train Loss  0.6727 Test Loss  0.4882 Train Acc 80.32% Test Acc 83.75% 
+Epoch 743 Train Loss  0.6807 Test Loss  0.5598 Train Acc 80.77% Test Acc 82.31% 
+Epoch 744 Train Loss  0.6498 Test Loss  0.6175 Train Acc 80.77% Test Acc 82.31% 
+Epoch 745 Train Loss  0.6407 Test Loss  0.4936 Train Acc 81.48% Test Acc 82.67% 
+Epoch 746 Train Loss  0.6700 Test Loss  0.5899 Train Acc 80.50% Test Acc 81.23% 
+Epoch 747 Train Loss  0.6527 Test Loss  0.5019 Train Acc 80.77% Test Acc 85.92% 
+Epoch 748 Train Loss  0.5845 Test Loss  0.5235 Train Acc 82.28% Test Acc 83.39% 
+Epoch 749 Train Loss  0.6017 Test Loss  0.6131 Train Acc 81.57% Test Acc 79.42% 
+Epoch 750 Train Loss  0.6068 Test Loss  0.5337 Train Acc 82.01% Test Acc 81.95%
+-------------------------------------------------------------------------------
