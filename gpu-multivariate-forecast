@@ -1,0 +1,166 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+print(f"Device: {tf.config.experimental.list_physical_devices('GPU')[0].device_type}")
+import numpy as np
+from sklearn.metrics import mean_absolute_error
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense, LSTM, GRU, \
+    SimpleRNN, Concatenate, Flatten
+tf.keras.backend.set_floatx('float32')
+from pandas_datareader import data
+from collections import deque
+from tensorflow.keras.regularizers import l1, l2, l1_l2
+
+start_date = '1990-01-01'
+end_date = '2020-01-01'
+
+panel_data = data.DataReader(name=['AAPL', 'IBM', 'MSFT'], data_source='yahoo',
+                             start=start_date, end=end_date)
+
+volume = panel_data['Close']
+
+train_len = int(9e-1*len(volume))
+
+STD = np.std(volume[:train_len], axis=0)
+MEAN = np.mean(volume[:train_len], axis=0)
+
+volume = ((volume - MEAN)/STD)
+
+three_day_ma = volume['AAPL'].rolling(3).mean().bfill()[train_len:]
+naive_one_day = volume['AAPL'].shift(-1).ffill(axis=0, limit=1)[train_len:]
+
+ma_benchmark = mean_absolute_error(volume['AAPL'][train_len:], three_day_ma)
+naive_benchmark = mean_absolute_error(volume['AAPL'][train_len:], naive_one_day)
+
+print(f'The three day moving average benchmark is {ma_benchmark:,.5f}'
+      f' and the naive benchmark is {naive_benchmark:,.5f}.')
+
+
+def multivariate_data(dataset, target, start_index, end_index, history_size,
+                      target_size, step, single_step=False):
+  data = []
+  labels = []
+
+  start_index = start_index + history_size
+  if end_index is None:
+    end_index = len(dataset) - target_size
+
+  for i in range(start_index, end_index):
+    indices = range(i-history_size, i, step)
+    data.append(dataset[indices])
+
+    if single_step:
+      labels.append(target[i+target_size])
+    else:
+      labels.append(target[i:i+target_size])
+
+  return np.array(data), np.array(labels)
+
+
+volume = volume.values
+
+x_train, y_train = multivariate_data(dataset=volume,
+                                     target=volume[:, 0],
+                                     start_index=0,
+                                     end_index=train_len,
+                                     history_size=24,
+                                     target_size=5,
+                                     step=4, single_step=False)
+
+x_test, y_test = multivariate_data(dataset=volume,
+                                   target=volume[:, 0],
+                                   start_index=train_len,
+                                   end_index=len(volume),
+                                   history_size=24,
+                                   target_size=1,
+                                   step=4, single_step=False)
+
+
+train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(32)
+test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(32)
+
+
+class ForecastModel(Model):
+    def __init__(self):
+        super(ForecastModel, self).__init__()
+        self.layer0 = Dense(units=32, activation='relu', dtype=tf.float32)
+        self.layer1 = LSTM(units=16, return_sequences=True, dtype=tf.float32,
+                            bias_regularizer=l2(1e-2))
+        self.layer2 = GRU(units=32, return_sequences=True, dtype=tf.float32,
+                            bias_regularizer=l2(1e-2))
+        self.layer3 = SimpleRNN(units=64, dtype=tf.float32,
+                            bias_regularizer=l2(1e-2))
+        self.layer4 = Dense(units=64, activation='relu', dtype=tf.float32)
+        self.flat = Flatten()
+        self.concat = Concatenate()
+        self.layer5 = Dense(units=y_train.shape[-1], dtype=tf.float32)
+
+    def __call__(self, inputs, training=None, **kwargs):
+        a = self.layer0(inputs)
+        b = self.layer1(inputs)
+        b = self.layer2(b)
+        b = self.layer3(b)
+        a = self.flat(a)
+        a = self.layer4(a)
+        x = self.concat([a, b])
+        x = self.layer5(x)
+        return x
+
+
+model = ForecastModel()
+
+loss_object = tf.keras.losses.MeanAbsoluteError()
+
+train_loss = tf.keras.metrics.Mean()
+test_loss = tf.keras.metrics.Mean()
+
+optimizer = tf.keras.optimizers.Adam(lr=15e-4)
+
+
+@tf.function
+def train_step(inputs, target):
+    with tf.GradientTape() as tape:
+        out = model(inputs, training=True)
+        loss = loss_object(target, out)
+
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    train_loss(loss)
+
+
+@tf.function
+def test_step(inputs, target):
+    out = model(inputs, training=False)
+    loss = loss_object(target, out)
+    test_loss(loss)
+
+
+def train(epochs=50, early_stop=5):
+    template = 'Epoch {:3} Train Loss {:6.4f} Test Loss {:6.4f}'
+    loss_history = deque()
+
+    for epoch in range(1, epochs + 1):
+        train_loss.reset_states()
+        test_loss.reset_states()
+
+        for inputs, labels in train_dataset:
+            train_step(inputs, labels)
+
+        for inputs, labels in test_dataset:
+            test_step(inputs, labels)
+
+        print(template.format(epoch,
+                              train_loss.result(),
+                              test_loss.result()))
+
+        loss_history.append(test_loss.result())
+
+        if len(loss_history) > early_stop and \
+            loss_history.popleft() < min(loss_history):
+            print(f'\nEarly stopping. No validation loss decrease in {early_stop} epochs.')
+            break
+
+
+if __name__ == '__main__':
+    train(epochs=250, early_stop=25)
