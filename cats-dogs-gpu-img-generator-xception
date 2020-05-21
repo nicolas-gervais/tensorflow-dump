@@ -1,6 +1,6 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.chdir(r'C:\Users\opti2377\OneDrive - The Toronto-Dominion Bank\Documents\dogsvscats')
+os.chdir('dogsvscats')
 from tensorflow import keras as K
 import tensorflow
 from collections import deque
