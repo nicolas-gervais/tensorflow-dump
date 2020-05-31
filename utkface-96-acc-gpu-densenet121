@@ -1,0 +1,175 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+from tensorflow import keras as K
+from collections import defaultdict, deque
+import numpy as np
+import cv2
+from sklearn.model_selection import train_test_split
+
+os.chdir(r'C:\Users\opti2377\practicedatasets/UTKFace')
+
+pictures_dict = defaultdict(lambda: [])
+age_dict = defaultdict(lambda: [])
+
+INPUT_SHAPE = (200, 200, 3)
+
+for folder in ['men', 'women']:
+    for file in os.listdir(folder):
+        if 15 <= int(file.split('_')[0]) <= 70:
+            image = cv2.imread(os.path.join(folder, file))
+            image = cv2.resize(image, INPUT_SHAPE[:-1])
+            pictures_dict[folder].append(image)
+            age_dict[folder].append(int(file.split('_')[0]))
+
+n_men = len(pictures_dict['men'])
+n_women = len(pictures_dict['women'])
+
+pictures = np.array(pictures_dict['men'] + pictures_dict['women'], dtype=np.uint8)
+
+sex = np.array([0 for _ in range(n_men)] + [1 for _ in range(n_women)], dtype=np.int32)
+age = np.array(age_dict['men'] + age_dict['women'])
+
+xtrain, xtest, ytrain, ytest = train_test_split(pictures, sex, test_size=2e-1)
+
+
+def train_transforms(img, target):
+    img = tf.image.random_flip_left_right(image=img)
+    img = tf.divide(img, 255)
+    target = tf.one_hot(target, depth=2)
+    return img, target
+
+def test_transforms(img, target):
+    img = tf.divide(img, 255)
+    target = tf.one_hot(target, depth=2)
+    return img, target
+
+
+train_dataset = tf.data.Dataset.from_tensor_slices((xtrain, ytrain)).\
+    shuffle(64).\
+    batch(32).\
+    map(train_transforms)
+
+test_dataset = tf.data.Dataset.from_tensor_slices((xtest, ytest)).\
+    shuffle(64).\
+    batch(32).\
+    map(test_transforms)
+
+
+class DenseNet(K.Model):
+    def __init__(self, input_shape, weights, include_top):
+        super(DenseNet, self).__init__()
+        self.base = tf.keras.applications.Xception(weights=weights,
+                                                   input_shape=input_shape,
+                                                   include_top=include_top)
+        self.flat = tf.keras.layers.Flatten(name='flattening')
+        self.out = K.layers.Dense(2, name='outputLayer')
+
+    def call(self, inputs, training=None, **kwargs):
+        x = self.base(inputs)
+        x = self.flat(x)
+        out = self.out(x)
+        return out
+
+
+dnet = DenseNet(input_shape=INPUT_SHAPE, include_top=False, weights='imagenet')
+
+dnet.build(input_shape=(None, *INPUT_SHAPE))
+
+dnet.summary()
+
+# dnet(np.random.rand(1, 224, 224, 3).astype(np.float32)).numpy()
+
+for layer in dnet.base.layers:
+    layer.trainable = True
+
+loss_object = K.losses.CategoricalCrossentropy(from_logits=True)
+
+train_loss = K.metrics.Mean()
+test_loss = K.metrics.Mean()
+
+train_acc = K.metrics.CategoricalAccuracy()
+test_acc = K.metrics.CategoricalAccuracy()
+
+optimizer = K.optimizers.Adam(learning_rate=.0001)
+
+
+@tf.function
+def train_step(inputs, labels):
+    with tf.GradientTape() as tape:
+        logits = dnet(inputs, training=True)
+        loss = loss_object(labels, logits)
+
+    gradients = tape.gradient(loss, dnet.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, dnet.trainable_variables))
+
+    train_acc(labels, logits)
+    train_loss(loss)
+
+
+@tf.function
+def test_step(inputs, labels):
+    logits = dnet(inputs, training=False)
+    loss = loss_object(labels, logits)
+    test_acc(labels, logits)
+    test_loss(loss)
+
+
+def train_and_learn(epochs=1, early_stop=1):
+    template = '{:2} Loss {:5.3f} TLoss {:5.3f} ' \
+               'Acc {:5.3%} TAcc {:5.3%} '
+
+    loss_history = deque(maxlen=early_stop + 1)
+
+    for epoch in range(1, epochs + 1):
+        train_loss.reset_states()
+        test_loss.reset_states()
+        train_acc.reset_states()
+        test_acc.reset_states()
+
+        for img, target in train_dataset:
+            train_step(img, target)
+
+        for img, target in test_dataset:
+            test_step(img, target)
+
+        print(template.format(
+            epoch,
+            train_loss.result(),
+            test_loss.result(),
+            train_acc.result(),
+            test_acc.result()))
+
+        loss_history.append(train_loss.result())
+
+        if epoch > early_stop and loss_history.popleft() < min(loss_history):
+            print(f'Early stopping. No validation loss decrease in {early_stop} epochs.')
+            break
+
+if __name__ == '__main__':
+    train_and_learn(epochs=250, early_stop=15)
+    
+--------------------------------------------------
+30 Loss 0.014 TLoss 0.222 Acc 99.477% TAcc 96.376%
+31 Loss 0.019 TLoss 0.201 Acc 99.325% TAcc 95.817%
+32 Loss 0.016 TLoss 0.208 Acc 99.465% TAcc 95.987%
+33 Loss 0.013 TLoss 0.245 Acc 99.520% TAcc 95.331%
+34 Loss 0.016 TLoss 0.196 Acc 99.435% TAcc 95.793%
+35 Loss 0.013 TLoss 0.207 Acc 99.587% TAcc 95.671%
+36 Loss 0.014 TLoss 0.241 Acc 99.508% TAcc 95.550%
+--------------------------------------------------
+ 
+Model: "dense_net_1"
+_________________________________________________________________
+Layer (type)                 Output Shape              Param #  
+=================================================================
+xception (Model)             (None, 7, 7, 2048)        20861480 
+_________________________________________________________________
+global_average_pooling2d_1 ( multiple                  0        
+_________________________________________________________________
+outputLayer (Dense)          multiple                  4098     
+=================================================================
+Total params: 20,865,578
+Trainable params: 20,811,050
+Non-trainable params: 54,528
+_________________________________________________________________
