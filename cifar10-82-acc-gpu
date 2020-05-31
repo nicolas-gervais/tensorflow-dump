@@ -1,0 +1,58 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+
+(xtrain, ytrain), (xtest, ytest) = tf.keras.datasets.cifar10.load_data()
+
+# cast = lambda x, y: (tf.cast(x, tf.float32), tf.cast(y, tf.int32))
+
+def train_transforms(img, target):
+    img = tf.image.random_flip_left_right(image=img)
+    img = tf.divide(img, 255)
+    return img, target
+
+def test_transforms(img, target):
+    img = tf.divide(img, 255)
+    return img, target
+
+BATCH_SIZE = 256
+
+train_ds = tf.data.Dataset.from_tensor_slices((xtrain, ytrain)).\
+    batch(BATCH_SIZE).map(train_transforms).repeat().prefetch(1)
+
+test_ds = tf.data.Dataset.from_tensor_slices((xtest, ytest)).\
+    batch(BATCH_SIZE).map(test_transforms).repeat().prefetch(1)
+
+# tf.reduce_max(next(iter(train_ds))[0])
+# tf.reduce_max(next(iter(test_ds))[0])
+
+class SubclassedModel(tf.keras.Model):
+    def __init__(self, weights, include_top, input_shape):
+        super(SubclassedModel, self).__init__()
+        self.base = tf.keras.applications.DenseNet121(weights=weights,
+                                                      include_top=include_top,
+                                                      input_shape=input_shape)
+        self.pool = tf.keras.layers.GlobalAveragePooling2D()
+        self.out = tf.keras.layers.Dense(10)
+
+    def call(self, x, training=None, **kwargs):
+        x = self.base(x)
+        x = self.pool(x)
+        x = self.out(x)
+        return x
+
+
+model = SubclassedModel(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
+
+model.compile(loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+              optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+              metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name='acc')])
+
+model.build(input_shape=(None, 32, 32, 3))
+
+model.summary()
+
+hist = model.fit(train_ds, validation_data=test_ds, verbose=2,
+                 steps_per_epoch=len(xtrain)//BATCH_SIZE//10*10, epochs=100,
+                 validation_steps=len(ytest)//BATCH_SIZE//10*10,
+                 callbacks=[tf.keras.callbacks.EarlyStopping(monitor='loss', patience=5)])
