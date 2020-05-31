@@ -1,0 +1,112 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+from tensorflow.keras.layers import Dense
+from tensorflow.keras import Model
+from sklearn.datasets import load_iris
+from functools import partial
+tf.keras.backend.set_floatx('float64')
+iris, target = load_iris(return_X_y=True)
+
+X = iris[:, :3]
+y = iris[:, 3]
+z = target
+
+onehot = partial(tf.one_hot, depth=3)
+
+dataset = tf.data.Dataset.from_tensor_slices((X, y, z)).shuffle(150)
+
+train_ds = dataset.take(120).shuffle(10).batch(8).map(lambda a, b, c: (a, b, onehot(c)))
+
+test_ds = dataset.skip(120).take(30).shuffle(10).batch(8).map(lambda a, b, c: (a, b, onehot(c)))
+
+next(iter(train_ds))
+
+class MyModel(Model):
+    def __init__(self):
+        super(MyModel, self).__init__()
+        self.d0 = Dense(64, activation='relu')
+        self.d1 = Dense(128, activation='relu')
+        self.d2 = Dense(1)
+        self.d3 = Dense(3)
+
+    def call(self, x, training=None, **kwargs):
+        x = self.d0(x)
+        x = self.d1(x)
+        a = self.d2(x)
+        b = self.d3(x)
+        return a, b
+
+model = MyModel()
+
+loss_obj_reg = tf.keras.losses.MeanAbsoluteError()
+loss_obj_cat = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+loss_reg_train = tf.keras.metrics.Mean(name='regression loss')
+loss_cat_train = tf.keras.metrics.Mean(name='categorical loss')
+
+loss_reg_test = tf.keras.metrics.Mean(name='regression loss')
+loss_cat_test = tf.keras.metrics.Mean(name='categorical loss')
+
+train_acc = tf.keras.metrics.CategoricalAccuracy()
+test_acc = tf.keras.metrics.CategoricalAccuracy()
+
+
+@tf.function
+def train_step(inputs, y_reg, y_cat):
+    with tf.GradientTape() as tape:
+        pred_reg, pred_cat = model(inputs, training=True)
+        reg_loss = loss_obj_reg(y_reg, pred_reg)
+        cat_loss = loss_obj_cat(y_cat, pred_cat)
+
+    gradients = tape.gradient([reg_loss, cat_loss], model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    loss_reg_train(reg_loss)
+    loss_cat_train(cat_loss)
+
+    train_acc(y_cat, pred_cat)
+
+
+@tf.function
+def test_step(inputs, y_reg, y_cat):
+    pred_reg, pred_cat = model(inputs, training=False)
+    reg_loss = loss_obj_reg(y_reg, pred_reg)
+    cat_loss = loss_obj_cat(y_cat, pred_cat)
+
+    loss_reg_test(reg_loss)
+    loss_cat_test(cat_loss)
+
+    test_acc(y_cat, pred_cat)
+
+
+for epoch in range(250):
+
+    loss_reg_train.reset_states()
+    loss_cat_train.reset_states()
+
+    loss_reg_test.reset_states()
+    loss_cat_test.reset_states()
+
+    train_acc.reset_states()
+    test_acc.reset_states()
+
+    for xx, yy, zz in train_ds:
+        train_step(xx, yy, zz)
+
+    for xx, yy, zz in test_ds:
+        test_step(xx, yy, zz)
+
+    template = 'Epoch {:3} ' \
+               'MAE {:5.3f} TMAE {:5.3f} ' \
+              'Entr {:5.3f} TEntr {:5.3f} ' \
+               'Acc {:7.2%} TAcc {:7.2%}'
+
+    print(template.format(epoch+1,
+                        loss_reg_train.result(),
+                        loss_reg_test.result(),
+                        loss_cat_train.result(),
+                        loss_cat_test.result(),
+                        train_acc.result(),
+                        test_acc.result()))
