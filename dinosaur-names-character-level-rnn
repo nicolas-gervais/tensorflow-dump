@@ -1,0 +1,177 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from tensorflow import keras
+import tensorflow as tf
+import numpy as np
+
+dinosaurs_repo = 'https://raw.githubusercontent.com/jun' \
+                 'osuarez/dinosaurs/master/dinosaurs.csv'
+
+filepath = keras.utils.get_file('dinosaurs.csv', dinosaurs_repo)
+
+with open(filepath) as f:
+    dinosaurs = f.read().replace('\n', ' ')
+
+dinosaurs = dinosaurs.replace('_', ' ')
+
+vocab = sorted(set(dinosaurs))
+
+dinosaurs = ' '.join(np.random.choice(dinosaurs.split(), 100_000))
+
+char2idx = {u:i for i, u in enumerate(vocab)}
+
+idx2char = np.array(vocab)
+
+text_as_integers = np.array([char2idx[i] for i in dinosaurs])
+
+max_length = max(map(len, dinosaurs.split()))
+
+examples_per_epoch = len(dinosaurs)//(max_length + 1)
+
+dataset = tf.data.Dataset.from_tensor_slices(text_as_integers)
+
+for example in dataset.take(5):
+    print(example.numpy())
+
+sequences = dataset.batch(max_length + 1, drop_remainder=True)
+
+for item in sequences.take(5):
+    print(repr(''.join(idx2char[item.numpy()])))
+
+ds = sequences.map(lambda x: (x[:-1], x[1:]))
+
+for input_example, target_example in  ds.take(1):
+    print ('Input data: ', repr(''.join(idx2char[input_example.numpy()])))
+    print ('Target data:', repr(''.join(idx2char[target_example.numpy()])))
+
+BATCH_SIZE = 128
+BUFFER_SIZE = 10_000
+
+ds = ds.shuffle(BUFFER_SIZE).batch(BATCH_SIZE, drop_remainder=True)
+
+vocab_size = len(vocab)
+
+embedding_dim = 256
+
+rnn_units = 1024
+
+def make_model(gru_units, embedding_dim, vocab_size, batch_size):
+    class GRUModel(keras.Model):
+        def __init__(self, gru_units, embedding_dim, vocab_size, batch_size):
+            super(GRUModel, self).__init__()
+            self.embedding_layer = keras.layers.Embedding(input_dim=vocab_size,
+                                                          output_dim=embedding_dim,
+                                                          batch_input_shape=[batch_size, None])
+            self.gru_layer = keras.layers.GRU(units=gru_units,
+                                              return_sequences=True,
+                                              stateful=True,
+                                              recurrent_initializer='glorot_uniform')
+            self.dense_layer = keras.layers.Dense(units=vocab_size)
+
+        def call(self, inputs, training=None, **kwargs):
+            x = self.embedding_layer(inputs)
+            x = self.gru_layer(x)
+            out = self.dense_layer(x)
+            return out
+    return GRUModel(gru_units, embedding_dim, vocab_size, batch_size)
+
+
+model = make_model(gru_units=rnn_units,
+                   embedding_dim=embedding_dim,
+                   vocab_size=vocab_size,
+                   batch_size=BATCH_SIZE)
+
+
+loss_object = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+train_loss = keras.metrics.Mean(name='train_loss')
+train_acc = keras.metrics.SparseCategoricalAccuracy(name='train_acc')
+
+optimizer = keras.optimizers.Adam(learning_rate=.001)
+
+
+@tf.function
+def train_step(inputs, labels):
+    with tf.GradientTape() as tape:
+        logits = model(inputs)
+        loss = loss_object(labels, logits)
+
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+    train_loss(loss)
+    train_acc(labels, logits)
+
+
+EPOCHS = 25
+template = 'Epoch {:3} ' \
+           '{} {:5.3f} ' \
+           '{} {:7.2%} '
+
+for epoch in range(EPOCHS):
+    for inputs, labels in ds:
+        train_step(inputs, labels)
+
+    print(template.format(
+        epoch + 1,
+        train_loss.name,
+        train_loss.result(),
+        train_acc.name,
+        train_acc.result()
+    ))
+    model.save_weights('weights')
+
+genrtr = make_model(gru_units=rnn_units,
+                   embedding_dim=embedding_dim,
+                   vocab_size=vocab_size,
+                   batch_size=1)
+
+
+genrtr.load_weights('weights')
+
+genrtr.build(tf.TensorShape([1, None]))
+
+
+def generate_text(model, start_string, temperature=1.):
+    num_generate = 200
+    input_eval = [char2idx[s] for s in start_string]
+    input_eval = tf.expand_dims(input_eval, 0)
+   
+    text_generated = []
+    model.reset_states()
+    for i in range(num_generate):
+        predictions = model(input_eval)
+        predictions = tf.squeeze(predictions, 0)
+       
+        predictions = predictions / temperature
+        predicted_id = tf.random.categorical(predictions, num_samples=1)[-1,0].numpy()
+        input_eval = tf.expand_dims([predicted_id], 0)
+       
+        text_generated.append(idx2char[predicted_id])
+
+    return start_string + ''.join(text_generated)
+
+
+generated = generate_text(genrtr, start_string=u"ptero", temperature=1.4).split()
+
+print('\n'.join(generated))
+
+---------
+pterocoss
+liraia
+rahonewienykus
+onchomimus
+trominglelbutetops
+camptosaurus
+triunxia
+llybutidon
+limnornis
+sphaerotholx
+sulaimanisanjuniraptor
+dracoraptor
+timurlia
+alnashetri
+mojoceratops
+saltopus
+olorotitan
+----------
