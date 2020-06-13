@@ -1,0 +1,97 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from tensorflow import keras
+import tensorflow as tf
+physical_devices = tf.config.list_physical_devices('GPU')
+tf.config.experimental.set_memory_growth(physical_devices[0], True)
+import numpy as np
+
+(xtrain, ytrain), (xtest, ytest) = keras.datasets.cifar10.load_data()
+
+train_ix = np.where(ytrain.ravel() == 1)
+test_ix = np.where(ytest.ravel() == 1)
+
+cars_train = xtrain[train_ix]
+cars_test = xtest[test_ix]
+
+cars = np.vstack([cars_train, cars_test]).astype(np.float32)/255
+
+X = tf.data.Dataset.from_tensor_slices(cars).batch(8)
+
+
+class Encoder(keras.Model):
+    def __init__(self):
+        super(Encoder, self).__init__()
+        self.flat = keras.layers.Flatten(input_shape=(32, 32, 3))
+        self.dense1 = keras.layers.Dense(128)
+        self.dense2 = keras.layers.Dense(32)
+
+    def call(self, inputs, training=None, **kwargs):
+        x = self.flat(inputs)
+        x = keras.activations.selu(self.dense1(x))
+        x = keras.activations.selu(self.dense2(x))
+        return x
+
+
+class Decoder(keras.Model):
+    def __init__(self):
+        super(Decoder, self).__init__()
+        self.dense1 = keras.layers.Dense(128, input_shape=[32])
+        self.dense2 = keras.layers.Dense(32 * 32 * 3)
+        self.reshape = keras.layers.Reshape([32, 32, 3])
+
+    def call(self, inputs, training=None, **kwargs):
+        x = keras.activations.selu(self.dense1(inputs))
+        x = keras.activations.sigmoid(self.dense2(x))
+        x = self.reshape(x)
+        return x
+
+
+class AutoEncoder(keras.Model):
+    def __init__(self, encoder, decoder):
+        super(AutoEncoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def call(self, inputs, training=None, **kwargs):
+        x = self.encoder(inputs)
+        x = self.decoder(x)
+        return x
+
+
+ae = AutoEncoder(Encoder(), Decoder())
+
+loss_object = keras.losses.BinaryCrossentropy()
+
+reconstruction_loss = keras.metrics.Mean(name='reconstruction_loss')
+
+optimizer = keras.optimizers.Adam()
+
+
+@tf.function
+def reconstruct(inputs):
+    with tf.GradientTape() as tape:
+        out = ae(inputs)
+        loss = loss_object(inputs, out)
+
+    gradients = tape.gradient(loss, ae.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, ae.trainable_variables))
+
+    reconstruction_loss(loss)
+
+
+if __name__ == '__main__':
+    template = 'Epoch {:2} Reconstruction Loss {:.4f}'
+    for epoch in range(50):
+        for input_batches in X:
+            reconstruct(input_batches)
+        print(template.format(epoch + 1, reconstruction_loss.result()))
+        
+-----------------------------------
+Epoch 35 Reconstruction Loss 0.5794
+Epoch 36 Reconstruction Loss 0.5793
+Epoch 37 Reconstruction Loss 0.5792
+Epoch 38 Reconstruction Loss 0.5791
+Epoch 39 Reconstruction Loss 0.5790
+Epoch 40 Reconstruction Loss 0.5789
+-----------------------------------
