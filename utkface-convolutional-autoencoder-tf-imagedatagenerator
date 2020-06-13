@@ -1,0 +1,115 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow import keras as K
+physical_devices = tf.config.list_physical_devices('GPU')
+tf.config.experimental.set_memory_growth(physical_devices[0], True)
+from collections import deque
+
+os.chdir(r'C:\Users\opti2377\OneDrive - The Toronto-Domini'
+         r'on Bank\Documents\practicedatasets/UTKFace')
+
+list_ds = tf.data.Dataset.list_files('*/*.jpg')
+
+load_img = lambda x: tf.io.decode_image(tf.io.read_file(x), channels=3, dtype=tf.float32)
+
+ds = list_ds.map(load_img).batch(64)
+
+
+class Encoder(K.Model):
+    def __init__(self):
+        super(Encoder, self).__init__()
+        self.conv1 = K.layers.Conv2D(32, kernel_size=(3, 3), padding='same')
+        self.maxp1 = K.layers.MaxPooling2D(pool_size=(2, 2))
+        self.conv2 = K.layers.Conv2D(64, kernel_size=(3, 3), padding='same')
+        self.maxp2 = K.layers.MaxPooling2D(pool_size=(2, 2))
+        self.conv3 = K.layers.Conv2D(128, kernel_size=(3, 3), padding='same')
+        self.maxp3 = K.layers.MaxPooling2D(pool_size=(2, 2))
+        self.conv4 = K.layers.Conv2D(256, kernel_size=(3, 3), padding='same')
+        self.maxp4 = K.layers.MaxPooling2D(pool_size=(2, 2))
+
+    def call(self, x, training=None, **kwargs):
+        x = tf.nn.relu(self.conv1(x))
+        x = self.maxp1(x)
+        x = tf.nn.relu(self.conv2(x))
+        x = self.maxp2(x)
+        x = tf.nn.relu(self.conv3(x))
+        x = self.maxp3(x)
+        x = tf.nn.relu(self.conv4(x))
+        x = self.maxp4(x)
+        return x
+
+
+class Decoder(K.Model):
+    def __init__(self):
+        super(Decoder, self).__init__()
+        self.convtrans1 = K.layers.Conv2DTranspose(128, strides=(2, 2),
+                                                   kernel_size=(3, 3),
+                                                   padding='valid',
+                                                   input_shape=(12, 12, 256))
+        self.convtrans2 = K.layers.Conv2DTranspose(64, kernel_size=(3, 3),
+                                                   strides=(2, 2),
+                                                   padding='same')
+        self.convtrans3 = K.layers.Conv2DTranspose(32, kernel_size=(3, 3),
+                                                   strides=(2, 2),
+                                                   padding='same')
+        self.convtrans4 = K.layers.Conv2DTranspose(3, kernel_size=(3, 3),
+                                                   strides=(2, 2),
+                                                   padding='same')
+        self.reshape = K.layers.Reshape([200, 200, 3])
+
+    def call(self, x, training=None, **kwargs):
+        x = tf.nn.relu(self.convtrans1(x))
+        x = tf.nn.relu(self.convtrans2(x))
+        x = tf.nn.relu(self.convtrans3(x))
+        x = tf.nn.sigmoid(self.convtrans4(x))
+        x = self.reshape(x)
+        return x
+
+
+class ConvAutoEncoder(K.Model):
+    def __init__(self, encoder, decoder):
+        super(ConvAutoEncoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def call(self, x, training=None, **kwargs):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
+
+
+ae = ConvAutoEncoder(Encoder(), Decoder())
+
+binary_crossentropy = K.losses.BinaryCrossentropy(from_logits=False)
+
+reconstruction_loss = K.metrics.Mean(name='reconstruction_loss')
+
+optimizer = K.optimizers.Adam(learning_rate=1e-2)
+
+EPOCHS = 100
+TEMPLATE = '\rEpoch {:2} Reconstruction Loss {:.4f}'
+monitor = deque(maxlen=11)
+
+if __name__ == '__main__':
+    for epoch in range(EPOCHS):
+        reconstruction_loss.reset_states()
+
+        for image_batch in ds:
+            with tf.GradientTape() as tape:
+                output = ae(image_batch)
+                loss = binary_crossentropy(image_batch, output)
+                print(f'\r{loss.numpy():.5f}', end='')
+
+            gradients = tape.gradient(loss, ae.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, ae.trainable_variables))
+
+            reconstruction_loss(loss)
+
+        print(TEMPLATE.format(epoch + 1, reconstruction_loss.result()))
+        monitor.append(reconstruction_loss.result())
+
+        if epoch >= monitor.maxlen and monitor.popleft() < min(monitor):
+            print(f'Early stopping. No reconstruction loss decrease in {monitor.maxlen - 1} epochs.')
+            break
