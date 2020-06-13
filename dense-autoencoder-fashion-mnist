@@ -83,6 +83,7 @@ def reconstruct(inputs):
 if __name__ == '__main__':
     template = 'Epoch {:2} Reconstruction Loss {:.4f}'
     for epoch in range(50):
+        reconstruction_loss.reset_states()
         for input_batches in X:
             reconstruct(input_batches)
         print(template.format(epoch + 1, reconstruction_loss.result()))
