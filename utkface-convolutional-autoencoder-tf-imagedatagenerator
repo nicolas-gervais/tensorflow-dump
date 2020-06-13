@@ -7,8 +7,7 @@ physical_devices = tf.config.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
 from collections import deque
 
-os.chdir(r'C:\Users\opti2377\OneDrive - The Toronto-Domini'
-         r'on Bank\Documents\practicedatasets/UTKFace')
+os.chdir(r'UTKFace')
 
 list_ds = tf.data.Dataset.list_files('*/*.jpg')
 
