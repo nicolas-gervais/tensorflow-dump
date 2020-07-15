@@ -1,0 +1,85 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from tensorflow import keras as K
+import tensorflow as tf
+import numpy as np
+from functools import partial
+
+(xtrain, ytrain), (xtest, ytest) = K.datasets.mnist.load_data()
+
+xtrain = np.expand_dims(xtrain, (-1)).astype(np.float32)/255
+xtest = np.expand_dims(xtest, (-1)).astype(np.float32)/255
+
+get_label = lambda x, y: (x, tf.reduce_sum(y))
+
+train_ds = tf.data.Dataset.from_tensor_slices((xtrain, ytrain))\
+    .shuffle(500)\
+    .batch(3, drop_remainder=True)\
+    .map(get_label)\
+    .batch(4)
+
+test_ds = tf.data.Dataset.from_tensor_slices((xtest, ytest))\
+    .shuffle(500)\
+    .batch(3, drop_remainder=True)\
+    .map(get_label)\
+    .batch(4)
+
+
+class ConvolutionalBlock(K.Model):
+    def __init__(self):
+        super(ConvolutionalBlock, self).__init__()
+        conv = partial(K.layers.Conv2D, kernel_size=(3, 3))
+        pool = partial(K.layers.MaxPool2D(pool_size=(2, 2)))
+
+        self.conv1 = conv(filters=8, input_shape=(28, 28, 1))
+        self.pool1 = pool
+        self.conv2 = conv(filters=16)
+        self.pool2 = pool
+        self.conv3 = conv(filters=32)
+        self.pool3 = pool
+
+        self.flat = K.layers.Flatten()
+
+    def call(self, x, training=None, **kwargs):
+        x = tf.nn.relu(self.conv1(x))
+        x = self.pool1(x)
+        x = tf.nn.relu(self.conv2(x))
+        x = self.pool2(x)
+        x = tf.nn.relu(self.conv3(x))
+        x = self.flat(x)
+        return x
+
+
+class MultiInputModel(K.Model):
+    def __init__(self):
+        super(MultiInputModel, self).__init__()
+        self.conv_block1 = ConvolutionalBlock()
+        self.conv_block2 = ConvolutionalBlock()
+        self.conv_block3 = ConvolutionalBlock()
+
+        self.concat = K.layers.Concatenate()
+
+        self.dense1 = K.layers.Dense(256)
+        self.dense2 = K.layers.Dense(512)
+        self.out = K.layers.Dense(1)
+
+    def call(self, x, training=None, **kwargs):
+        a = self.conv_block1(x[:, 0, ...])
+        b = self.conv_block1(x[:, 1, ...])
+        c = self.conv_block1(x[:, 2, ...])
+
+        x = self.concat([a, b, c])
+
+        x = tf.nn.relu(self.dense1(x))
+        x = tf.nn.relu(self.dense2(x))
+        x = self.out(x)
+        return x
+
+mim = MultiInputModel()
+
+
+mim(next(iter(train_ds))[0])
+
+mim.compile(loss='mae', optimizer='adam')
+
+history = mim.fit(train_ds, validation_data=test_ds, epochs=5)
