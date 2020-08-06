@@ -1,0 +1,92 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from tensorflow import keras as K
+from tensorflow.keras.layers import Conv2D, Flatten, Dense, MaxPooling2D, Dropout
+from tensorflow import nn as nn
+from functools import partial
+
+dataset, info = tfds.load('mnist', with_info=True)
+
+train, test = dataset['train'], dataset['test']
+
+def prepare(dataset):
+    inputs = tf.divide(x=dataset['image'], y=255)
+    targets = tf.one_hot(indices=dataset['label'], depth=10)
+    return inputs, targets
+
+train = train.take(5_000).batch(4).map(prepare)
+test = test.take(1_000).batch(4).map(prepare)
+
+class MyCNN(K.Model):
+    def __init__(self):
+        super(MyCNN, self).__init__()
+        Conv = partial(Conv2D, kernel_size=(3, 3), activation=nn.relu)
+        MaxPool = partial(MaxPooling2D, pool_size=(2, 2))
+
+        self.conv1 = Conv(filters=8)
+        self.maxp1 = MaxPool()
+        self.conv2 = Conv(filters=16)
+        self.maxp2 = MaxPool()
+        self.conv3 = Conv(filters=32)
+        self.maxp3 = MaxPool()
+        self.flatt = Flatten()
+        self.dens1 = Dense(64, activation=nn.relu)
+        self.drop1 = Dropout(.5)
+        self.dens2 = Dense(10, activation=nn.softmax)
+
+    def call(self, x, training=None, **kwargs):
+        x = self.conv1(x)
+        x = self.maxp1(x)
+        x = self.conv2(x)
+        x = self.maxp2(x)
+        x = self.conv3(x)
+        x = self.maxp3(x)
+        x = self.flatt(x)
+        x = self.dens1(x)
+        x = self.drop1(x)
+        x = self.dens2(x)
+        return x
+
+model = MyCNN()
+
+loss_object = tf.losses.categorical_crossentropy
+
+def compute_loss(model, x, y, training):
+  out = model(inputs=x, training=training)
+  loss = loss_object(y_true=y, y_pred=out, from_logits=True)
+  return loss
+
+def get_grad(model, x, y):
+    with tf.GradientTape() as tape:
+        loss = compute_loss(model, x, y, training=False)
+    return loss, tape.gradient(loss, model.trainable_variables)
+
+optimizer = tf.optimizers.Adam()
+
+verbose = "Epoch {:2d}" \
+          " Loss: {:.3f} TLoss: {:.3f} Acc: {:.3%} TAcc: {:.3%}"
+
+for epoch in range(1, 10 + 1):
+    train_loss = tf.metrics.Mean()
+    train_acc = tf.metrics.CategoricalAccuracy()
+    test_loss = tf.metrics.Mean()
+    test_acc = tf.metrics.CategoricalAccuracy()
+
+    for x, y in train:
+        loss_value, grads = get_grad(model, x, y)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        train_loss.update_state(loss_value)
+        train_acc.update_state(y, model(x, training=True))
+
+    for x, y in test:
+        loss_value, _ = get_grad(model, x, y)
+        test_loss.update_state(loss_value)
+        test_acc.update_state(y, model(x, training=False))
+
+    print(verbose.format(epoch,
+                         train_loss.result(),
+                         train_acc.result(),
+                         test_loss.result(),
+                         test_acc.result()))
