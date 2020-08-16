@@ -1,0 +1,109 @@
+import tensorflow as tf
+import pandas as pd
+from tensorflow import feature_column
+import numpy as np
+from tensorflow.keras.layers import *
+
+df = pd.DataFrame(
+    index=['Jim', 'Michael', 'Pam', 'Oscar', 'Angela', 'Dwight', 'Erin'],
+    data={
+        'department': ['sales', 'management', 'reception', 'accounting',
+                       'accounting', 'sales', 'reception'],
+        'sex': ['male', 'male', 'female', 'male', 'female', 'male', 'female'],
+        'senior': ['yes', 'yes', 'no', 'no', 'yes', 'yes', 'no'],
+        'height': [1.91, 1.75, 1.68, 1.75, 1.55, 1.89, 1.65],
+        'age': ['40s', '50s', '40s', '60s', '40s', '50s', '40s'],
+        'quits': [1, 1, 1, 0, 0, 1, 1]})
+
+df['height'] = df['height'].astype(np.float32)
+
+print(df)
+
+features = df.drop('quits', axis=1)
+labels = df.loc[:, 'quits']
+
+ds = tf.data.Dataset.from_tensor_slices((dict(features), labels)).shuffle(8).batch(4)
+
+print(next(iter(ds)))
+
+for features, labels in ds.take(1):
+  print('Features:', list(features.keys()), '\n')
+  for feature_name in features.keys():
+      print(f'{feature_name} batch: '.rjust(20), features[feature_name])
+
+features_batch, labels_batch = next(iter(ds))
+
+# 1) Numeric Column
+
+height_column = feature_column.numeric_column('height')
+
+height_layer = DenseFeatures(height_column, dtype=tf.float32)
+
+print(height_layer(features))
+
+# 2) Bucketized Column
+
+bucketized_height_column = feature_column.bucketized_column(height_column, [1.7])
+
+bucketized_height_layer = DenseFeatures(bucketized_height_column)
+
+print(bucketized_height_layer(features))
+
+# 3) Categorical Column
+
+sex_column = feature_column.categorical_column_with_vocabulary_list(
+    'sex', df['sex'].unique().tolist())
+
+sex_one_hot = feature_column.indicator_column(sex_column)
+
+sex_layer = DenseFeatures(sex_one_hot)
+
+print(sex_layer(features))
+
+# 4) Embedding Column
+
+department_column = feature_column.categorical_column_with_vocabulary_list(
+    key='department', vocabulary_list=df['department'].unique().tolist())
+
+department_embedding = feature_column.embedding_column(department_column, dimension=2)
+
+department_layer = DenseFeatures(department_embedding)
+
+print(department_layer(features))
+
+# 5 Crossed Features
+
+age_column = feature_column.categorical_column_with_vocabulary_list(
+    key='age', vocabulary_list=df['age'].unique().tolist())
+
+senior_column = feature_column.categorical_column_with_vocabulary_list(
+    key='senior', vocabulary_list=df['senior'].unique().tolist())
+
+
+age_one_hot = feature_column.indicator_column(age_column)
+age_layer = DenseFeatures(age_one_hot)
+print(age_layer(features))
+
+senior_one_hot = feature_column.indicator_column(senior_column)
+senior_layer = DenseFeatures(senior_one_hot)
+print(senior_layer(features))
+
+# Use all
+
+feature_columns = [department_embedding, age_one_hot, senior_one_hot,
+                   bucketized_height_column, height_column]
+feature_layer = DenseFeatures(feature_columns)
+
+feature_layer(features)
+
+model = tf.keras.Sequential([
+  feature_layer,
+  Dense(128, activation='relu'),
+  Dense(1)
+])
+
+model.compile(optimizer='adam',
+              loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+              metrics=['accuracy'])
+
+history = model.fit(ds, epochs=1)
