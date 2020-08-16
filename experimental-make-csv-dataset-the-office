@@ -1,0 +1,82 @@
+import tensorflow as tf
+import pandas as pd
+from tensorflow.keras.layers import DenseFeatures, Dense
+
+df = pd.DataFrame(
+    index=['Jim', 'Michael', 'Pam', 'Oscar', 'Angela', 'Dwight', 'Erin', 'Toby', 'Holly', 'Kevin'],
+    data={
+        'department': ['sales', 'management', 'reception', 'accounting', 'accounting',
+                       'sales', 'reception', 'hr', 'hr', 'accounting'],
+        'sex': ['male', 'male', 'female', 'male', 'female', 'male', 'female',
+                'male', 'female', 'male'],
+        'senior': ['yes', 'yes', 'no', 'no', 'yes', 'yes', 'no', 'yes', 'yes', 'no'],
+        'height': [1.91, 1.75, 1.68, 1.75, 1.55, 1.89, 1.65, 1.77, 1.62, 1.85],
+        'age': [40, 58, 46, 61, 49, 54, 40, 53, 52, 47],
+        'quits': [1, 1, 1, 0, 0, 1, 1, 1, 0, 0]})
+
+df.to_csv('officeemployees.csv')
+
+csv_dataset = tf.data.experimental.make_csv_dataset(
+    file_pattern='officeemployees.csv',
+    batch_size=4,
+    select_columns=['department', 'sex', 'senior', 'height', 'age', 'quits'],
+    column_defaults=['', '', '', 0., 0, 0],
+    shuffle_buffer_size=16,
+    label_name='quits',
+    sloppy=True,
+    num_epochs=4
+)
+
+features, labels = next(iter(csv_dataset))
+
+for feat, lab in csv_dataset.take(1):
+    for key, val in feat.items():
+        print(f'{key:10s}', val.numpy())
+
+
+class PackNumericFeatures:
+    def __init__(self, names):
+        self.names = names
+
+    def __call__(self, x, y):
+        numeric_features = [x.pop(name) for name in self.names]
+        numeric_features = [tf.cast(ft, tf.float32) for ft in numeric_features]
+        numeric_features = tf.stack(numeric_features, axis=-1)
+        features['numeric'] = numeric_features
+        return features, labels
+
+next(iter(csv_dataset.map(PackNumericFeatures(['age', 'height']))))
+
+packed_ds = csv_dataset.map(PackNumericFeatures(['age', 'height']))
+
+numeric_columns = tf.feature_column.numeric_column('numeric', shape=[2])
+numeric_columns = [numeric_columns]
+
+categorical_columns = []
+for feature in ['senior', 'department', 'sex']:
+    cat_col = tf.feature_column.categorical_column_with_vocabulary_list(
+        key=feature, vocabulary_list=df[feature].unique().tolist())
+    categorical_columns.append(tf.feature_column.indicator_column(cat_col))
+
+num_layer = DenseFeatures(numeric_columns)
+cat_layer = DenseFeatures(categorical_columns)
+
+packed_features, packed_labels = next(iter(packed_ds))
+
+print(cat_layer(packed_features))
+print(num_layer(packed_features))
+
+preprocessing_layer = DenseFeatures(numeric_columns + categorical_columns)
+
+model = tf.keras.Sequential([
+    preprocessing_layer,
+    Dense(16, activation='relu'),
+    Dense(24, activation='relu'),
+    Dense(1, activation='sigmoid')])
+
+model.compile(
+    loss='binary_crossentropy',
+    optimizer='adam',
+    metrics=['accuracy'])
+
+history = model.fit(packed_ds, epochs=10)
