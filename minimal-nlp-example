@@ -1,0 +1,51 @@
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+X_train = ['They like my dog', 'I hate my cat', 'We will love my hamster', 'I dislike your llama']
+X_test = ['We love our hamster', 'They hate our platypus']
+y_train = [1, 0, 1, 0]
+y_test = [1, 0]
+
+labels = {0: 'negative', 1: 'positive'}
+
+encoder = keras.preprocessing.text.Tokenizer()
+
+encoder.fit_on_texts(X_train)
+
+X_train = encoder.texts_to_sequences(X_train)
+X_test = encoder.texts_to_sequences(X_test)
+
+max_length = max(map(len, X_train))
+
+X_train = keras.preprocessing.sequence.pad_sequences(X_train, maxlen=max_length)
+X_test = keras.preprocessing.sequence.pad_sequences(X_test, maxlen=max_length)
+
+train_batches = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(1)
+test_batches = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(1)
+
+embedding_dim = 4
+
+model = keras.Sequential([
+  layers.Embedding(len(encoder.index_word) + 1, embedding_dim),
+  layers.GlobalAveragePooling1D(),
+  layers.Dense(24, activation='relu'),
+  layers.Dense(1, activation='sigmoid')
+])
+
+model.summary()
+
+model.compile(optimizer='adam',
+              loss=tf.keras.losses.BinaryCrossentropy(),
+              metrics=['accuracy'])
+
+history = model.fit(train_batches, epochs=50, validation_data=test_batches)
+
+def test_input(text):
+    tokenized = encoder.texts_to_sequences([text])
+    padded = keras.preprocessing.sequence.pad_sequences(tokenized, maxlen=max_length)
+    result = model.predict(padded)
+    rounded = tf.cast(tf.round(result), tf.int32)
+    return labels[rounded.numpy()[0][0]]
+
+test_input('we like your dog')
