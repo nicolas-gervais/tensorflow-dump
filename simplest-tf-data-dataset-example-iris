@@ -1,0 +1,16 @@
+import tensorflow as tf
+from tensorflow.keras.layers import Dense
+from sklearn.datasets import load_iris
+
+X, y = load_iris(return_X_y=True)
+
+ds = tf.data.Dataset.from_tensor_slices((X, y)).shuffle(25).batch(8)
+
+model = tf.keras.Sequential([
+    Dense(16, activation='relu'),
+    Dense(32, activation='relu'),
+    Dense(3, activation='softmax')])
+
+model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+history = model.fit(ds, epochs=10)
