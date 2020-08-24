@@ -1,0 +1,86 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from tensorflow import keras as K
+from functools import partial
+
+[flowers], info = tfds.load('tf_flowers', split=['train'],
+                            as_supervised=True, with_info=True)
+
+resize_rescale = lambda x: tf.divide(tf.image.resize(x, (32, 32)), 255)
+one_hot = lambda y: tf.one_hot(y, depth=info.features['label'].num_classes)
+
+ds = flowers.shuffle(4321).\
+    take(1234).\
+    map(lambda x, y: (resize_rescale(x), one_hot(y))).\
+    batch(4)
+
+
+class CNN(K.Model):
+    def __init__(self):
+        super(CNN, self).__init__()
+        ConvLayer = partial(K.layers.Conv2D, kernel_size=(3, 3), activation='relu')
+        PoolingLayer = partial(K.layers.MaxPool2D, pool_size=(2, 2))
+
+        self.conv1 = ConvLayer(filters=16)
+        self.maxp1 = PoolingLayer()
+        self.conv2 = ConvLayer(filters=16)
+        self.maxp2 = PoolingLayer()
+        self.conv3 = ConvLayer(filters=16)
+        self.maxp3 = PoolingLayer()
+        self.flat = K.layers.Flatten()
+        self.dense1 = K.layers.Dense(64, activation='relu')
+        self.dense2 = K.layers.Dense(info.features['label'].num_classes)
+
+    def call(self, x, training=None, **kwargs):
+        x = self.conv1(x)
+        x = self.maxp1(x)
+        x = self.conv2(x)
+        x = self.maxp2(x)
+        x = self.conv3(x)
+        x = self.maxp3(x)
+        x = self.flat(x)
+        x = self.dense1(x)
+        x = self.dense2(x)
+        return  x
+
+
+model = CNN()
+
+loss_object = tf.losses.CategoricalCrossentropy(from_logits=True)
+
+get_loss = lambda x, y, training=None: loss_object(y, model(x, training=training))
+
+
+def get_gradients(inputs, targets):
+    with tf.GradientTape() as tape:
+        loss = get_loss(inputs, targets, training=True)
+    return loss, tape.gradient(loss, model.trainable_weights)
+
+
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    0.001,
+    decay_steps=500,
+    decay_rate=0.96,
+    staircase=True)
+
+optimizer = tf.optimizers.Adam(learning_rate=lr_schedule)
+
+for epoch in range(1, 5 + 1):
+    epoch_loss = K.metrics.Mean(name='train_loss')
+    epoch_acc = K.metrics.CategoricalAccuracy('train_acc')
+
+    for x, y in ds:
+        loss, gradients = get_gradients(x, y)
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+
+        epoch_loss.update_state(loss)
+        epoch_acc.update_state(y, model(x, training=False))
+
+    print(f'Epoch {epoch:=2d} '
+          f'Train Loss {epoch_loss.result():=6.4f} '
+          f'Train Acc {epoch_acc.result():=6.3%} '
+          f'Iterations {optimizer.iterations.numpy():=5,d} '
+          f'LR {lr_schedule(optimizer.iterations).numpy():=8.6f}')
