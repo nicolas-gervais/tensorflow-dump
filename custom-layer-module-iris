@@ -1,0 +1,74 @@
+import tensorflow as tf
+import tensorflow_datasets as tfds
+
+ds = tfds.load('iris', split='train', as_supervised=True)
+
+train_ds = ds.take(125).shuffle(125).batch(1)
+test_ds = ds.skip(125).take(25).shuffle(25).batch(1)
+
+class Dense(tf.Module):
+  def __init__(self, in_features, out_features, activation, name=None):
+    super().__init__(name=name)
+    self.activation = activation
+    self.w = tf.Variable(
+      tf.initializers.GlorotUniform()([in_features, out_features]), name='weights')
+    self.b = tf.Variable(tf.zeros([out_features]), name='biases')
+  def __call__(self, x):
+    y = tf.matmul(x, self.w) + self.b
+    return self.activation(y)
+
+class SequentialModel(tf.Module):
+  def __init__(self, name):
+    super().__init__(name=name)
+    self.dense1 = Dense(in_features=4, out_features=32, activation=tf.nn.relu)
+    self.dense2 = Dense(in_features=32, out_features=64, activation=tf.nn.relu)
+    self.dense3 = Dense(in_features=64, out_features=3, activation=tf.nn.softmax)
+
+  def __call__(self, x):
+    x = self.dense1(x)
+    x = self.dense2(x)
+    x = self.dense3(x)
+    return x
+
+my_model = SequentialModel(name='sequential_model')
+
+loss_object = tf.losses.sparse_categorical_crossentropy
+
+def compute_loss(model, x, y):
+    out = model(x)
+    loss = loss_object(y, out, from_logits=False)
+    return out, loss
+
+def compute_gradients(model, x, y):
+    with tf.GradientTape() as tape:
+        out, loss_val = compute_loss(model, x, y)
+    grads = tape.gradient(loss_val, model.trainable_variables)
+    return out, loss_val, grads
+
+optimizer = tf.optimizers.Adam(lr=0.01)
+
+for epoch in range(1, 10 + 1):
+    train_loss = tf.metrics.Mean(name='train_loss')
+    test_loss = tf.metrics.Mean(name='test_loss')
+
+    train_acc = tf.metrics.SparseCategoricalAccuracy()
+    test_acc = tf.metrics.SparseCategoricalAccuracy()
+
+    for input_batch, label_batch in train_ds:
+        out, loss_val, grads = compute_gradients(my_model, input_batch, label_batch)
+        optimizer.apply_gradients(zip(grads, my_model.trainable_variables))
+
+        train_loss.update_state(loss_val)
+        train_acc.update_state(label_batch, out)
+
+    for input_batch, label_batch in test_ds:
+        out, loss_val = compute_loss(my_model, input_batch, label_batch)
+
+        test_loss.update_state(loss_val)
+        test_acc.update_state(label_batch, out)
+
+    print(f'Epoch {epoch:2d} '
+          f'Loss {train_loss.result():=5.3f} '
+          f'Acc {train_acc.result():=5.3f} '
+          f'TLoss {test_loss.result():=5.3f} '
+          f'TAcc {test_acc.result():=5.3f}')
