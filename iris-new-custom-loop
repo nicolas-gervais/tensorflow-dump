@@ -1,3 +1,10 @@
+import tensorflow as tf
+import tensorflow_datasets as tfds
+
+ds = tfds.load('iris', split='train', as_supervised=True)
+
+train = ds.take(125).shuffle(16).batch(4)
+test = ds.skip(125).take(25).shuffle(16).batch(4)
 
 class MyModel(tf.keras.Model):
     def __init__(self):
@@ -14,31 +21,30 @@ class MyModel(tf.keras.Model):
 
 model = MyModel()
 
-loss_object = tf.losses.CategoricalCrossentropy(from_logits=False)
+loss_object = tf.losses.SparseCategoricalCrossentropy(from_logits=False)
 
 
 def compute_loss(model, x, y, training):
-  out = model(inputs=x, training=training)
+  out = model(x, training=training)
   loss = loss_object(y_true=y, y_pred=out)
   return loss
 
 
 def get_grad(model, x, y):
     with tf.GradientTape() as tape:
-        loss = compute_loss(model, x, y, training=False)
+        loss = compute_loss(model, x, y, training=True)
     return loss, tape.gradient(loss, model.trainable_variables)
 
 
 optimizer = tf.optimizers.Adam()
 
-verbose = "Epoch {:2d}" \
-          " Loss: {:.3f} TLoss: {:.3f} Acc: {:.2%} TAcc: {:.2%}"
+verbose = "Epoch {:2d} Loss: {:.3f} TLoss: {:.3f} Acc: {:.2%} TAcc: {:.2%}"
 
-for epoch in range(1, 10 + 1):
+for epoch in range(1, 25 + 1):
     train_loss = tf.metrics.Mean()
-    train_acc = tf.metrics.CategoricalAccuracy()
+    train_acc = tf.metrics.SparseCategoricalAccuracy()
     test_loss = tf.metrics.Mean()
-    test_acc = tf.metrics.CategoricalAccuracy()
+    test_acc = tf.metrics.SparseCategoricalAccuracy()
 
     for x, y in train:
         loss_value, grads = get_grad(model, x, y)
