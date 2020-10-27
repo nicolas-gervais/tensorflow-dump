@@ -2,9 +2,8 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow_datasets as tfds
 import tensorflow as tf
-import tensorflow_transform as tft
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Dense, Concatenate, LSTM
+from tensorflow.keras.layers import Dense 
 from collections import deque
 
 data, info = tfds.load('iris', split='train',
@@ -28,17 +27,13 @@ class DenseModel(Model):
         super(DenseModel, self).__init__()
         self.dens1 = Dense(8, activation='elu')
         self.dens2 = Dense(16, activation='relu')
-        self.lstm1 = LSTM(8)
-        self.conca = Concatenate()
         self.layer3 = Dense(info.features['label'].num_classes)
 
     def call(self, inputs, training=None, **kwargs):
         x = self.dens1(inputs)
-        y = self.dens2(x)
-        z = self.lstm1(tf.expand_dims(x, 1))
-        x = self.conca([y, z])
-        out = self.layer3(x)
-        return out
+        x = self.dens2(x)
+        x = self.dens3(x)
+        return x
 
 
 model = DenseModel()
