@@ -17,7 +17,7 @@ class XOR(Model):
     def __init__(self):
         super(XOR, self).__init__()
         self.layer1 = Dense(2, activation='tanh')
-        self.layer2 = Dense(3, activation='tanh')
+        self.layer2 = Dense(2, activation='tanh')
         self.layer3 = Dense(2)
 
     def __call__(self, x, *args, **kwargs):
@@ -73,14 +73,14 @@ def train():
         test_step(x, y)
 
 
-def main(epochs=50):
+def main(epochs=100):
     for epoch in range(1, epochs + 1):
         train()
         template = '{:>2} {:.3f} {:.3f} {:.3f} {:.3f}'
         print(template.format(epoch,
-                              train_loss.result(), 
-                              train_acc.result(), 
-                              test_loss.result(), 
+                              train_loss.result(),
+                              train_acc.result(),
+                              test_loss.result(),
                               test_acc.result()))
 
 
