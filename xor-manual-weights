@@ -1,0 +1,32 @@
+import tensorflow as tf
+import numpy as np
+
+inputs = tf.cast(tf.random.uniform((10, 2), 0, 2, dtype=tf.int32), tf.float32)
+outputs = tf.cast(tf.equal(*zip(tf.transpose(inputs)))[0], tf.int32)
+
+ds = tf.data.Dataset.from_tensor_slices((inputs, outputs)).batch(1)
+
+step_activation = lambda x: tf.cast(tf.greater_equal(x, 0.5), tf.float32)
+
+inp = tf.keras.layers.Input(shape=(2,))
+x = tf.keras.layers.Dense(2, activation=step_activation)(inp)
+out = tf.keras.layers.Dense(1, activation=lambda x: 1-step_activation(x))(x) 
+model = tf.keras.Model(inputs=inp, outputs=out)
+
+model.build(input_shape=(2,))
+
+model.get_weights()
+
+weights = [np.array([[1, 1], [1, 1]]),
+           np.array([-1.5, -0.5]),
+           np.array([[-1], [1]]),
+           np.array([-0.5])]
+
+model.compile(loss='binary_crossentropy', metrics=['binary_accuracy'], optimizer='adam')
+model.set_weights(weights)
+
+loss, acc = model.evaluate(inputs, outputs)
+
+for x,  y in ds:
+    print(tf.squeeze(model(x)).numpy().astype(int), '-->', tf.squeeze(y).numpy())
+
