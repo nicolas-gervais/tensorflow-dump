@@ -1,0 +1,28 @@
+import tensorflow as tf
+
+(train), (test) = tf.keras.datasets.mnist.load_data()
+
+train_ds = tf.data.Dataset.\
+    from_tensor_slices(train).\
+    map(lambda x, y: (tf.expand_dims(x, axis=-1), y)).batch(4)
+test_ds = tf.data.Dataset.\
+    from_tensor_slices(test).\
+    map(lambda x, y: (tf.expand_dims(x, axis=-1), y)).batch(4)
+
+input_layer = tf.keras.layers.Input(shape=(28, 28, 1))
+x = tf.keras.layers.experimental.preprocessing.Resizing(28, 28)(input_layer)
+x = tf.keras.layers.experimental.preprocessing.Rescaling(1/255)(x)
+x = tf.keras.layers.experimental.preprocessing.RandomContrast(1.)(x)
+x = tf.keras.layers.experimental.preprocessing.RandomRotation(0.2)(x)
+x = tf.keras.layers.Conv2D(16, 3, activation='relu')(x)
+x = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(x)
+x = tf.keras.layers.Conv2D(32, 3, activation='relu')(x)
+x = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(x)
+x = tf.keras.layers.Flatten()(x)
+x = tf.keras.layers.Dense(64, activation='relu')(x)
+out = tf.keras.layers.Dense(10, activation='softmax')(x)
+model = tf.keras.Model(inputs=input_layer, outputs=out)
+
+model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+history = model.fit(train_ds, validation_data=test_ds, epochs=5)
