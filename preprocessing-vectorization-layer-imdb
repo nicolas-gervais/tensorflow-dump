@@ -1,0 +1,100 @@
+import tensorflow as tf
+import tensorflow_datasets as tfds
+import csv
+import os
+os.chdir(r'C:\Users\nicol\Documents\Datasets')
+
+(train_ds, test_ds), info = tfds.load('imdb_reviews/subwords8k',
+                                      split=['train', 'test'],
+                                      as_supervised=True,
+                                      with_info=True)
+
+decode = info.features['text'].encoder.decode
+encode = info.features['text'].encoder.encode
+
+# with open('imdb_train.csv', 'w', newline='', encoding='utf-8') as csvfile:
+#     writer = csv.DictWriter(csvfile, delimiter=',', fieldnames=['REVIEW', 'RATING'])
+#     writer.writeheader()
+#     for ix, (x, y) in enumerate(train_ds):
+#         writer.writerow({'REVIEW': decode(x),
+#                          'RATING': y.numpy()})
+#     csvfile.close()
+#
+# with open('imdb_test.csv', 'w', newline='', encoding='utf-8') as csvfile:
+#     writer = csv.DictWriter(csvfile, delimiter=',', fieldnames=['REVIEW', 'RATING'])
+#     writer.writeheader()
+#     for ix, (x, y) in enumerate(test_ds):
+#         writer.writerow({'REVIEW': decode(x),
+#                          'RATING': y.numpy()})
+#     csvfile.close()
+
+X_train = list()
+y_train = list()
+with open('imdb_train.csv', 'r', newline='', encoding='utf-8') as csvfile:
+    reader = csv.DictReader(csvfile, delimiter=',', fieldnames=['REVIEW', 'RATING'])
+    column_names = next(reader).keys()
+    for ix, row in enumerate(reader):
+        X_train.append(row['REVIEW'])
+        y_train.append(int(row['RATING']))
+    csvfile.close()
+
+X_test = list()
+y_test = list()
+with open('imdb_test.csv', 'r', newline='', encoding='utf-8') as csvfile:
+    reader = csv.DictReader(csvfile, delimiter=',', fieldnames=['REVIEW', 'RATING'])
+    column_names = next(reader).keys()
+    for ix, row in enumerate(reader):
+        X_test.append(row['REVIEW'])
+        y_test.append(int(row['RATING']))
+    csvfile.close()
+
+vectorize_layer = tf.keras.layers.experimental.preprocessing.TextVectorization(
+    standardize='lower_and_strip_punctuation',
+    output_sequence_length=150,
+    max_tokens=8000,
+    output_mode='int'
+)
+
+encoding_layer = tf.keras.layers.experimental.preprocessing.CategoryEncoding(
+    output_mode='binary',
+    max_tokens=vectorize_layer._max_tokens
+)
+
+ds1 = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+ds2 = tf.data.Dataset.from_tensor_slices((X_test, y_test))
+
+ds = ds1.concatenate(ds2).shuffle(128)
+
+train_ds = ds.take(45000).batch(16)
+test_ds = ds.skip(45000).take(5000).batch(16)
+
+vectorize_layer.adapt(train_ds.map(lambda x, y: x))
+
+input_layer = tf.keras.Input(shape=(1,), dtype=tf.string)
+x = vectorize_layer(input_layer)
+z = encoding_layer(x)
+x = tf.keras.layers.Embedding(vectorize_layer._max_tokens + 1, 128)(x)
+x = tf.keras.layers.GlobalAveragePooling1D()(x)
+z = tf.keras.layers.Dense(64, activation='relu')(z)
+x = tf.keras.layers.Dense(64, activation='relu')(x)
+x = tf.keras.layers.concatenate([z, x], axis=1)
+output_layer = tf.keras.layers.Dense(1, activation='sigmoid')(x)
+
+model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
+
+model.compile(optimizer=tf.optimizers.Adam(),
+              loss=tf.losses.BinaryCrossentropy(name='loss'),
+              metrics=[tf.metrics.BinaryAccuracy(name='acc')])
+
+early_stopping = [tf.keras.callbacks.EarlyStopping(patience=3)]
+
+model.summary()
+
+history = model.fit(train_ds, validation_data=test_ds,
+                    epochs=25, callbacks=early_stopping)
+
+test_input = 'This movie was so amazing, I loved it and really enjoyed it.'
+
+model.predict([test_input])
+
+# array([[0.99201167]], dtype=float32)
